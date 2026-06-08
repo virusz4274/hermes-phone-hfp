@@ -47,6 +47,7 @@ from .hfp.handshake import HFPHandshaker, HandshakeError
 from .hfp.protocol import CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
 from .state import CallState, ConnectionState, HFPState
+from .transport import apply_network_settings
 
 log = logging.getLogger(__name__)
 
@@ -355,7 +356,7 @@ async def stop_audio_capture(session_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Status HTTP server (SSE/network mode only)
+# Status HTTP server (streamable-http / network mode only)
 # ---------------------------------------------------------------------------
 
 def _make_status_server(host: str, port: int) -> HTTPServer:
@@ -392,29 +393,29 @@ def main() -> None:
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "streamable-http"],
         default="stdio",
         help=(
             "MCP transport: 'stdio' (default) for same-machine clients; "
-            "'sse' to serve over HTTP so remote machines can connect"
+            "'streamable-http' to serve over HTTP so remote machines can connect"
         ),
     )
     parser.add_argument(
         "--host",
         default="0.0.0.0",
-        help="Bind host for SSE transport (default: 0.0.0.0)",
+        help="Bind host for streamable-http transport (default: 0.0.0.0)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="Port for SSE MCP transport (default: 8000)",
+        help="Port for the streamable-http MCP transport (default: 8000)",
     )
     parser.add_argument(
         "--status-port",
         type=int,
         default=8001,
-        help="Port for the /status JSON endpoint used by the Hermes plugin on remote machines (default: 8001, SSE mode only)",
+        help="Port for the /status JSON endpoint used by the Hermes plugin on remote machines (default: 8001, streamable-http mode only)",
     )
     args = parser.parse_args()
 
@@ -423,7 +424,10 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if args.transport == "sse":
+    if args.transport == "streamable-http":
+        # FastMCP.run() does not accept host/port — they must be set on the
+        # settings object before run() (see hfp_mcp/transport.py).
+        apply_network_settings(mcp.settings, args.host, args.port)
         status_srv = _make_status_server(args.host, args.status_port)
         status_thread = threading.Thread(
             target=status_srv.serve_forever,
@@ -432,10 +436,13 @@ def main() -> None:
         )
         status_thread.start()
         log.info(
+            "MCP endpoint:    http://%s:%d/mcp", args.host, args.port
+        )
+        log.info(
             "Status endpoint: http://%s:%d/status  (set HFP_MCP_STATUS_URL on remote Hermes host)",
             args.host,
             args.status_port,
         )
-        mcp.run("sse", host=args.host, port=args.port)
+        mcp.run("streamable-http")
     else:
         mcp.run("stdio")

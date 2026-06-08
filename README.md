@@ -100,17 +100,17 @@ plugins:
 
 The MCP server must run on the Pi (it owns the Bluetooth hardware), but the AI app (Hermes, Claude Desktop, etc.) runs on a different machine on the same network.
 
-**On the Pi** — start the server in SSE (HTTP) mode:
+**On the Pi** — start the server in streamable-http (HTTP) mode:
 
 ```bash
-.venv/bin/hfp-mcp-server --transport sse
-# MCP endpoint:    http://raspberrypi.local:8000/sse
+.venv/bin/hfp-mcp-server --transport streamable-http
+# MCP endpoint:    http://raspberrypi.local:8000/mcp
 # Status endpoint: http://raspberrypi.local:8001/status
 ```
 
 You can customise the ports:
 ```bash
-.venv/bin/hfp-mcp-server --transport sse --port 8000 --status-port 8001
+.venv/bin/hfp-mcp-server --transport streamable-http --port 8000 --status-port 8001
 ```
 
 **On the remote machine** — point your AI app at the Pi:
@@ -120,7 +120,7 @@ Claude Desktop `claude_desktop_config.json`:
 {
   "mcpServers": {
     "hfp-phone": {
-      "url": "http://raspberrypi.local:8000/sse"
+      "url": "http://raspberrypi.local:8000/mcp"
     }
   }
 }
@@ -130,8 +130,8 @@ Hermes `config.yaml`:
 ```yaml
 mcp_servers:
   - name: hfp-mcp
-    transport: sse
-    url: http://raspberrypi.local:8000/sse
+    transport: streamable-http
+    url: http://raspberrypi.local:8000/mcp
 
 plugins:
   - hfp-call-awareness
@@ -144,7 +144,7 @@ export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
 
 Or set it permanently in your shell profile / systemd environment.
 
-> **Security note:** The SSE and status ports are unauthenticated. Keep them on a private/home LAN. If you need remote access, use an SSH tunnel:
+> **Security note:** The streamable-http and status ports are unauthenticated. Keep them on a private/home LAN. If you need remote access, use an SSH tunnel:
 > ```bash
 > ssh -L 8000:localhost:8000 -L 8001:localhost:8001 pi@raspberrypi.local
 > ```
