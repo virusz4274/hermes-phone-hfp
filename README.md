@@ -37,25 +37,29 @@ cd phone-bluetooth-hfp-mcp
 sudo bash setup/install.sh
 ```
 
-The script installs system packages, configures BlueZ and WirePlumber, and creates a virtualenv.
+The script installs system packages, configures BlueZ and WirePlumber, and creates a virtualenv. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …` works on any account, not just `pi`); override explicitly with `SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe — every step is idempotent.
 
 ### 2. Pair your phone
 
-Pair once manually:
+**Start the MCP server first** (see step 3), then pair. The server registers the
+HFP Hands-Free profile and a pairing agent on startup — the phone only sees the
+Pi as a "Phone audio" device while the server is running.
+
+With the server running, pair from the **phone's** Bluetooth settings: scan,
+select the Pi (its adapter alias, e.g. `raspberrypi`), and confirm the passkey
+on the phone. The Pi auto-accepts. Then trust it so it reconnects automatically:
 
 ```bash
-bluetoothctl
-> power on
-> pairable on
-> discoverable on
-> scan on
-# ... find your phone's address, e.g. AA:BB:CC:DD:EE:FF
-> pair AA:BB:CC:DD:EE:FF
-> trust AA:BB:CC:DD:EE:FF
-> quit
+bluetoothctl devices            # find the phone's address
+# Device AA:BB:CC:DD:EE:FF Your Phone
+bluetoothctl trust AA:BB:CC:DD:EE:FF
 ```
 
-After this, the phone will auto-reconnect when the server starts.
+If the phone shows **"incorrect passkey / couldn't pair"**, it's almost always
+one of: the server isn't running (no HFP profile advertised), or another service
+is holding the adapter (see Troubleshooting → *Pairing fails*).
+
+After trusting, the phone auto-reconnects whenever the server starts.
 
 ### 3. Configure your MCP client
 
@@ -144,10 +148,90 @@ export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
 
 Or set it permanently in your shell profile / systemd environment.
 
-> **Security note:** The streamable-http and status ports are unauthenticated. Keep them on a private/home LAN. If you need remote access, use an SSH tunnel:
+> **Security note:** The streamable-http and status ports are unauthenticated,
+> and by default the server accepts any `Host` header (DNS-rebinding protection
+> off) so LAN clients can connect — see [Host header / remote clients](#host-header--remote-clients-421-misdirected-request).
+> Keep these ports on a private/home LAN. To restrict which hosts may connect,
+> pass `--allowed-host`. If you need remote access, use an SSH tunnel:
 > ```bash
 > ssh -L 8000:localhost:8000 -L 8001:localhost:8001 pi@raspberrypi.local
 > ```
+
+## Server launch options
+
+```
+hfp-mcp-server [--transport stdio|streamable-http]
+               [--host HOST] [--port PORT] [--status-port PORT]
+               [--allowed-host HOST[:PORT] ...]
+```
+
+| Flag | Default | Applies to | Description |
+|------|---------|-----------|-------------|
+| `--transport` | `stdio` | both | `stdio` = MCP client spawns the server as a child process (Model A). `streamable-http` = serve over HTTP so remote machines can connect (Model B). |
+| `--host` | `0.0.0.0` | http | Bind address. `0.0.0.0` = all interfaces (LAN-reachable); `127.0.0.1` = local only. |
+| `--port` | `8000` | http | Port for the MCP endpoint (`/mcp`). |
+| `--status-port` | `8001` | http | Port for the plain-JSON `/status` endpoint used by the Hermes plugin. |
+| `--allowed-host` | _(none)_ | http | Host header value the server will accept (repeatable). Omit to **disable** DNS-rebinding protection so any LAN client connects; pass one or more to lock down. See [Host header / remote clients](#host-header--remote-clients-421-misdirected-request) below. |
+
+The Bluetooth stack (adapter, pairing agent, HFP profile) initialises at process
+startup in **both** transports — you don't need an MCP client connected for the
+phone to pair or connect.
+
+**Examples:**
+
+```bash
+# Local MCP client (Claude Desktop / Hermes) spawns it — Model A
+hfp-mcp-server
+
+# Remote client over HTTP on default ports — Model B
+hfp-mcp-server --transport streamable-http
+#   MCP:    http://<pi-host>:8000/mcp
+#   Status: http://<pi-host>:8001/status
+
+# Custom ports (e.g. if 8000 is taken by Docker/another service)
+hfp-mcp-server --transport streamable-http --port 8080 --status-port 8081
+
+# Bind to localhost only (pair with an SSH tunnel for remote access)
+hfp-mcp-server --transport streamable-http --host 127.0.0.1
+
+# Lock down to specific hostnames/IPs the clients use to reach the Pi
+hfp-mcp-server --transport streamable-http \
+    --allowed-host raspberrypi.local:8000 --allowed-host 10.0.0.200:8000
+```
+
+> **Tip — check what's using a port:** `sudo ss -tlnp | grep 8000`. A Docker
+> `docker-proxy` commonly holds 8000; pick free ports with the flags above.
+
+> The endpoint paths are fixed: `/mcp` (MCP) and `/status` (JSON). The host
+> portion is whatever the remote machine uses to reach the Pi — `raspberrypi.local`,
+> the alias from `bluetoothctl show` (e.g. `tardis.local`), or the LAN IP.
+
+### Host header / remote clients (`421 Misdirected Request`)
+
+The MCP SDK includes **DNS-rebinding protection** that, by default, only accepts
+a `Host` header pointing at `localhost`. A remote client (e.g. Codex on another
+machine connecting to `http://10.0.0.200:8000/mcp`) sends `Host: 10.0.0.200:8000`,
+which the SDK rejects:
+
+```
+WARNING  Invalid Host header: 10.0.0.200:8000
+POST /mcp HTTP/1.1" 421 Misdirected Request
+```
+
+This server is meant for a **trusted private LAN**, so by default (no
+`--allowed-host`) it disables that check and accepts any Host header. To keep the
+protection on, list every name/IP clients use to reach the Pi:
+
+```bash
+# Allow specific host:port values
+--allowed-host raspberrypi.local:8000 --allowed-host 10.0.0.200:8000
+
+# Allow a hostname on any port (':*' wildcard)
+--allowed-host 'tardis.local:*'
+```
+
+> Unrelated 404s for `/.well-known/oauth-authorization-server` are harmless —
+> the client is probing for optional OAuth, which this server doesn't use.
 
 ## MCP Tools
 
@@ -191,8 +275,31 @@ Or set it permanently in your shell profile / systemd environment.
 
 ## Troubleshooting
 
+**Pairing fails / "incorrect passkey" / `le-connection-abort-by-local`**
+- **Is the server running?** It registers the HFP profile + pairing agent on
+  startup. With it stopped, the phone won't see "Phone audio" and pairing fails.
+- **Another service holding the adapter.** If something else uses the same
+  Bluetooth radio — most commonly **Home Assistant's Bluetooth integration**
+  (look for `/org/bleak/...` lines in `journalctl -u bluetooth`) — it contends
+  with HFP and aborts the connection. Stop that service while pairing, or give
+  this server a **dedicated USB Bluetooth dongle** (let the other service keep
+  the built-in adapter). HA reaches BlueZ via a `/run/dbus` mount, not
+  `privileged`, so removing that mount or disabling its Bluetooth integration
+  also frees the radio.
+- Pair from the **phone** side and confirm the passkey there (the Pi uses the
+  `DisplayYesNo` agent and auto-accepts).
+
+**`address already in use` when starting in streamable-http mode**
+- Another process owns the port (a Docker `docker-proxy` on 8000 is common).
+  Check with `sudo ss -tlnp | grep <port>` and start on free ports:
+  `--port 8080 --status-port 8081`.
+
+**`br-connection-profile-unavailable` on connect**
+- PipeWire/WirePlumber must be running to register the HFP audio endpoint:
+  `systemctl --user status pipewire wireplumber` — start them if inactive.
+
 **Phone doesn't appear in scan_paired_devices**
-- Ensure phone is paired (`bluetoothctl paired-devices`)
+- Ensure phone is paired (`bluetoothctl devices`)
 - Ensure phone has "Phone audio" enabled in its Bluetooth settings for the Pi
 
 **Handshake fails**
@@ -209,6 +316,12 @@ Or set it permanently in your shell profile / systemd environment.
 - Ensure your user is in the `bluetooth` group: `groups $USER`
 - Ensure the D-Bus policy was installed: `ls /etc/dbus-1/system.d/hfp-mcp.conf`
 - Re-login or reboot for group changes to take effect
+
+**`pip install` fails building pycairo (`Dependency "cairo" not found`)**
+- The venv must reuse system GI packages. The installer now creates it with
+  `--system-site-packages` and installs `libcairo2-dev`. If you hit this on an
+  older checkout: `sudo apt install libcairo2-dev`, then recreate the venv with
+  `python3 -m venv --system-site-packages .venv`.
 
 ## Development
 

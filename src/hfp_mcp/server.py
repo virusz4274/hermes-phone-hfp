@@ -63,6 +63,14 @@ _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
 _dispatcher_task: asyncio.Task | None = None
 
+# Bluetooth stack — initialised once at process startup (see _start_bluetooth_stack)
+_glib_loop: "GLib.MainLoop | None" = None
+_agent_ref = None
+_profile_ref = None
+_bt_initialized = False
+_bt_init_lock: "asyncio.Lock | None" = None
+_http_mode = False
+
 
 def _write_state_file() -> None:
     """Write a JSON snapshot of HFP state to STATE_FILE for the Hermes plugin."""
@@ -76,67 +84,101 @@ def _write_state_file() -> None:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+async def _start_bluetooth_stack() -> None:
+    """
+    Initialise the D-Bus / BlueZ side: adapter, pairing agent, HFP profile,
+    and the GLib main loop that dispatches D-Bus signals.
+
+    Idempotent — safe to call from both the stdio lifespan and the HTTP app
+    startup hook. The work runs exactly once, on whichever event loop is
+    serving MCP tool calls (the asyncio queues must bind to that loop).
+    """
+    global _manager, _glib_loop, _agent_ref, _profile_ref
+    global _bt_initialized, _bt_init_lock
+
+    if _bt_init_lock is None:
+        _bt_init_lock = asyncio.Lock()
+    async with _bt_init_lock:
+        if _bt_initialized:
+            return
+
+        loop = asyncio.get_running_loop()
+
+        # Queues MUST be created inside a running event loop (Python ≥ 3.10)
+        _state._asyncio_loop = loop
+        _state._at_event_queue = asyncio.Queue()
+        _state._at_cmd_queue = asyncio.Queue()
+        _state._on_change = _write_state_file
+        _write_state_file()  # write initial disconnected state
+
+        # Initialise D-Bus with GLib integration BEFORE creating the SystemBus
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SystemBus()
+
+        _manager = BlueZManager(bus)
+        _manager.find_adapter()
+        _manager.set_powered(True)
+        _manager.set_pairable(True)
+
+        # Pairing agent (Pi auto-accepts; phone shows passkey to user)
+        _agent_ref = HFPAgent(bus)
+        register_agent(bus)
+
+        # HFP profile — BlueZ calls NewConnection when the phone connects
+        def _on_new_connection(address: str, sock, props: dict) -> None:
+            _state.set_connected(address, sock)
+            # create_task is safe here: call_soon_threadsafe runs the callback
+            # inside the asyncio event loop, so create_task has a running loop.
+            loop.call_soon_threadsafe(
+                asyncio.create_task,
+                _run_handshake_and_session(address),
+            )
+
+        def _on_request_disconnection(address: str) -> None:
+            log.info("Phone requested disconnection: %s", address)
+            _state.set_disconnected()
+
+        def _on_release() -> None:
+            log.warning("HFP profile released by bluetoothd")
+
+        _profile_ref = HFPProfile(
+            bus, _on_new_connection, _on_request_disconnection, _on_release
+        )
+        register_hfp_profile(bus)
+
+        # Start GLib MainLoop in background thread (owns all D-Bus I/O)
+        _glib_loop = GLib.MainLoop()
+        threading.Thread(
+            target=_glib_loop.run, daemon=True, name="glib-mainloop"
+        ).start()
+        log.info("GLib MainLoop started")
+
+        _bt_initialized = True
+
+
+def _stop_bluetooth_stack() -> None:
+    """Tear down the GLib loop and audio. Called once at process shutdown."""
+    global _glib_loop
+    _audio_manager.stop_all()
+    if _glib_loop is not None:
+        _glib_loop.quit()
+        _glib_loop = None
+    STATE_FILE.unlink(missing_ok=True)
+    log.info("GLib MainLoop stopped")
+
+
 @asynccontextmanager
 async def lifespan(app: FastMCP) -> AsyncIterator[None]:
-    global _manager, _rfcomm_thread, _dispatcher_task
-
-    loop = asyncio.get_event_loop()
-
-    # Queues MUST be created inside a running event loop (Python ≥ 3.10)
-    _state._asyncio_loop = loop
-    _state._at_event_queue = asyncio.Queue()
-    _state._at_cmd_queue = asyncio.Queue()
-    _state._on_change = _write_state_file
-    _write_state_file()  # write initial disconnected state
-
-    # Initialise D-Bus with GLib integration BEFORE creating the SystemBus
-    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
-
-    _manager = BlueZManager(bus)
-    _manager.find_adapter()
-    _manager.set_powered(True)
-    _manager.set_pairable(True)
-
-    # Pairing agent (auto-accept, headless mode)
-    _agent = HFPAgent(bus)
-    register_agent(bus)
-
-    # HFP profile — BlueZ calls NewConnection when the phone connects
-    def _on_new_connection(address: str, sock, props: dict) -> None:
-        _state.set_connected(address, sock)
-        # create_task is safe here: call_soon_threadsafe runs the callback
-        # inside the asyncio event loop, so create_task has a running loop.
-        loop.call_soon_threadsafe(
-            asyncio.create_task,
-            _run_handshake_and_session(address),
-        )
-
-    def _on_request_disconnection(address: str) -> None:
-        log.info("Phone requested disconnection: %s", address)
-        _state.set_disconnected()
-
-    def _on_release() -> None:
-        log.warning("HFP profile released by bluetoothd")
-
-    _profile = HFPProfile(bus, _on_new_connection, _on_request_disconnection, _on_release)
-    register_hfp_profile(bus)
-
-    # Start GLib MainLoop in background thread (owns all D-Bus I/O)
-    glib_loop = GLib.MainLoop()
-    glib_thread = threading.Thread(
-        target=glib_loop.run, daemon=True, name="glib-mainloop"
-    )
-    glib_thread.start()
-    log.info("GLib MainLoop started")
-
+    # Runs immediately in stdio mode (one session at launch); in HTTP mode it
+    # also runs per MCP session, but _start_bluetooth_stack is guarded so the
+    # real work happens exactly once (the HTTP app startup hook calls it first).
+    await _start_bluetooth_stack()
     try:
         yield
     finally:
-        _audio_manager.stop_all()
-        glib_loop.quit()
-        STATE_FILE.unlink(missing_ok=True)
-        log.info("GLib MainLoop stopped")
+        # HTTP mode tears down via the app shutdown hook (not per-session).
+        if not _http_mode:
+            _stop_bluetooth_stack()
 
 
 async def _run_handshake_and_session(address: str) -> None:
@@ -417,6 +459,19 @@ def main() -> None:
         default=8001,
         help="Port for the /status JSON endpoint used by the Hermes plugin on remote machines (default: 8001, streamable-http mode only)",
     )
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        metavar="HOST[:PORT]",
+        default=None,
+        help=(
+            "Add a Host header value the HTTP transport will accept (repeatable). "
+            "Use a 'host:*' pattern to allow any port, e.g. 'raspberrypi.local:*'. "
+            "If omitted, DNS-rebinding protection is DISABLED so any LAN client can "
+            "connect — fine for a trusted private network. Pass one or more "
+            "--allowed-host to lock the server down to specific names/IPs."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -425,9 +480,34 @@ def main() -> None:
     )
 
     if args.transport == "streamable-http":
+        global _http_mode
+        _http_mode = True
+
         # FastMCP.run() does not accept host/port — they must be set on the
         # settings object before run() (see hfp_mcp/transport.py).
         apply_network_settings(mcp.settings, args.host, args.port)
+
+        # The MCP SDK's DNS-rebinding protection only trusts a localhost Host
+        # header by default, so remote LAN clients (e.g. Codex on another
+        # machine) are rejected with "421 Misdirected Request / Invalid Host
+        # header". This server is intended for a trusted private LAN (see the
+        # security note in the README). Without --allowed-host we disable the
+        # check so any LAN client connects; with it, we lock down to the given
+        # names/IPs (supports 'host:*' to allow any port).
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        if args.allowed_host:
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=args.allowed_host,
+                allowed_origins=args.allowed_host,
+            )
+            log.info("HTTP Host allowlist: %s", ", ".join(args.allowed_host))
+        else:
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            )
+
         status_srv = _make_status_server(args.host, args.status_port)
         status_thread = threading.Thread(
             target=status_srv.serve_forever,
@@ -443,6 +523,24 @@ def main() -> None:
             args.host,
             args.status_port,
         )
-        mcp.run("streamable-http")
+
+        # The FastMCP HTTP app's own lifespan only runs the MCP session
+        # manager — our Bluetooth stack lives on the per-session server, which
+        # would leave BlueZ uninitialised until a client connects. Wrap the app
+        # lifespan so the Bluetooth stack comes up at process startup instead.
+        import uvicorn
+
+        app = mcp.streamable_http_app()
+        session_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def _app_lifespan(starlette_app):
+            await _start_bluetooth_stack()
+            async with session_lifespan(starlette_app):
+                yield
+            _stop_bluetooth_stack()
+
+        app.router.lifespan_context = _app_lifespan
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     else:
         mcp.run("stdio")

@@ -1,9 +1,9 @@
 """
 HFPAgent — D-Bus object implementing org.bluez.Agent1.
 
-Handles Bluetooth pairing in headless mode (no keyboard/display on Pi).
-Capability "NoInputNoOutput" triggers SSP Just Works — auto-accept all
-RequestConfirmation calls so the phone can pair without user interaction.
+Handles Bluetooth pairing in headless mode.
+Capability "DisplayYesNo" — Pi auto-accepts RequestConfirmation while the
+phone displays the passkey for the user to confirm on the phone side.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ AGENT1_IFACE = "org.bluez.Agent1"
 
 
 class HFPAgent(dbus.service.Object):
-    """Implements org.bluez.Agent1 — auto-accepts all pairing requests."""
+    """Implements org.bluez.Agent1 — Pi auto-accepts, phone shows passkey to user."""
 
     def __init__(self, bus: dbus.SystemBus) -> None:
         super().__init__(bus, AGENT_PATH)
@@ -69,6 +69,6 @@ def register_agent(bus: dbus.SystemBus) -> None:
         bus.get_object(BLUEZ_SERVICE, BLUEZ_PROFILE_MANAGER_PATH),
         BLUEZ_AGENT_MANAGER_IFACE,
     )
-    am.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+    am.RegisterAgent(AGENT_PATH, "DisplayYesNo")
     am.RequestDefaultAgent(AGENT_PATH)
-    log.info("Pairing agent registered (NoInputNoOutput)")
+    log.info("Pairing agent registered (DisplayYesNo)")

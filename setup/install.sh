@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-SERVICE_USER="${SERVICE_USER:-pi}"   # override: SERVICE_USER=myuser sudo bash install.sh
+SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-pi}}"   # override: SERVICE_USER=myuser sudo -E bash install.sh
 
 echo "==> Installing system dependencies"
 apt-get update -qq
@@ -27,7 +27,8 @@ apt-get install -y \
     wireplumber \
     pulseaudio-utils \
     python3-pip \
-    python3-venv
+    python3-venv \
+    libcairo2-dev
 
 echo "==> Adding ${SERVICE_USER} to bluetooth group"
 usermod -aG bluetooth "$SERVICE_USER" || true
@@ -44,8 +45,8 @@ if grep -q '^\[Policy\]' "$BLUEZ_CONF" 2>/dev/null; then
 else
     printf '\n[Policy]\nAutoEnable=true\n' >> "$BLUEZ_CONF"
 fi
-if ! grep -q 'ExperimentalFeatures' "$BLUEZ_CONF" 2>/dev/null; then
-    printf '\n[General]\nExperimentalFeatures=true\n' >> "$BLUEZ_CONF"
+if ! grep -q '^Experimental' "$BLUEZ_CONF" 2>/dev/null; then
+    printf '\n[General]\nExperimental=true\n' >> "$BLUEZ_CONF"
 fi
 
 echo "==> Configuring WirePlumber for HFP"
@@ -63,7 +64,7 @@ sudo -u "$SERVICE_USER" \
 
 echo "==> Installing Python package"
 # Install into a virtual environment in the repo
-python3 -m venv "$REPO_DIR/.venv"
+python3 -m venv --system-site-packages "$REPO_DIR/.venv"
 "$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR"
 
 echo "==> Installing Hermes call-awareness plugin"
