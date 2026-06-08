@@ -25,7 +25,7 @@ apt-get install -y \
     pipewire \
     pipewire-pulse \
     wireplumber \
-    portaudio19-dev \
+    pulseaudio-utils \
     python3-pip \
     python3-venv
 
@@ -56,7 +56,10 @@ chmod 644 /etc/wireplumber/wireplumber.conf.d/99-hfp-audio.conf
 echo "==> Enabling services"
 systemctl enable bluetooth
 systemctl restart bluetooth
-systemctl --user enable wireplumber 2>/dev/null || true
+# WirePlumber runs in the service user's session, not root's — enable it there.
+sudo -u "$SERVICE_USER" \
+    XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" \
+    systemctl --user enable wireplumber 2>/dev/null || true
 
 echo "==> Installing Python package"
 # Install into a virtual environment in the repo

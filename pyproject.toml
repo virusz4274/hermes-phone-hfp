@@ -13,9 +13,9 @@ dependencies = [
     "mcp>=1.27.0",
     "dbus-python>=1.3.2",
     "PyGObject>=3.48.0",
-    "sounddevice>=0.4.7",
-    "numpy>=1.24.0",
 ]
+# Audio capture/playback uses the parec/pacat CLI tools (pulseaudio-utils),
+# not a Python audio library — see src/hfp_mcp/audio/capture.py.
 
 [project.optional-dependencies]
 dev = [
