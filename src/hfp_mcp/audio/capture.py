@@ -124,10 +124,17 @@ class AudioSession:
                 outdata.fill(0)   # silence when nothing queued
 
     def queue_playback(self, pcm_bytes: bytes) -> None:
-        """Queue raw PCM bytes for playback into the call."""
+        """
+        Queue raw PCM bytes for playback into the call.
+
+        Splits the audio into AUDIO_CHUNK_FRAMES-sized slices so that the
+        playback callback (which processes one slice per invocation) plays
+        the full audio rather than truncating at the first chunk boundary.
+        """
         arr = np.frombuffer(pcm_bytes, dtype=AUDIO_DTYPE)
         with self._pb_lock:
-            self._playback_buf.append(arr)
+            for i in range(0, max(len(arr), 1), AUDIO_CHUNK_FRAMES):
+                self._playback_buf.append(arr[i : i + AUDIO_CHUNK_FRAMES])
 
     # ------------------------------------------------------------------
     # Convenience helpers (used by MCP tools)

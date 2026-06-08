@@ -3,16 +3,16 @@ HFP feature flags, D-Bus constants, and audio parameters.
 All tuneable values live here.
 """
 
-# HFP 1.8 Hands-Free features bitmask (sent in AT+BRSF)
-# Bit 1: EC/NR function (no)
-# Bit 2: Three-way calling (no)
-# Bit 3: CLI presentation capability (yes)
-# Bit 4: Voice recognition activation (no)
-# Bit 5: Remote volume control (yes)
-# Bit 6: Enhanced call status (yes)
-# Bit 7: Enhanced call control (no)
-# Bit 8: Codec negotiation (no — keep CVSD/8kHz for simplicity)
-HFP_HF_FEATURES: int = (1 << 2) | (1 << 4) | (1 << 5)  # 0b00100100 = 36
+# HFP 1.8 Hands-Free features bitmask (sent in AT+BRSF, Table 3.7)
+# Bit 0 (  1): EC/NR function — no
+# Bit 1 (  2): Three-way calling — no
+# Bit 2 (  4): CLI presentation capability — yes
+# Bit 3 (  8): Voice recognition activation — no
+# Bit 4 ( 16): Remote volume control — yes
+# Bit 5 ( 32): Enhanced call status — yes
+# Bit 6 ( 64): Enhanced call control — no
+# Bit 7 (128): Codec negotiation (mSBC) — no, keep CVSD/8 kHz for simplicity
+HFP_HF_FEATURES: int = (1 << 2) | (1 << 4) | (1 << 5)  # 4 | 16 | 32 = 52
 
 # Bluetooth UUIDs
 HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"   # Hands-Free (HF side)

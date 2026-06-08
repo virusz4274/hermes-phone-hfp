@@ -88,11 +88,11 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
     # HFP profile — BlueZ calls NewConnection when the phone connects
     def _on_new_connection(address: str, sock, props: dict) -> None:
         _state.set_connected(address, sock)
+        # create_task is safe here: call_soon_threadsafe runs the callback
+        # inside the asyncio event loop, so create_task has a running loop.
         loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(
-                _run_handshake_and_session(address),
-                loop=loop,
-            )
+            asyncio.create_task,
+            _run_handshake_and_session(address),
         )
 
     def _on_request_disconnection(address: str) -> None:
@@ -123,16 +123,21 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
 
 async def _run_handshake_and_session(address: str) -> None:
     global _rfcomm_thread, _dispatcher_task
+
+    # RFCOMM thread must start BEFORE the handshake: the handshaker writes
+    # commands to _at_cmd_queue and reads responses from _at_event_queue, and
+    # only RFCOMMThread moves bytes between those queues and the real socket.
+    _rfcomm_thread = RFCOMMThread(_state)
+    _rfcomm_thread.start()
+
     try:
         await HFPHandshaker(_state).run()
         log.info("HFP connected to %s", address)
     except HandshakeError as exc:
         log.error("Handshake failed: %s", exc)
+        _rfcomm_thread.stop()
         _state.set_disconnected()
         return
-
-    _rfcomm_thread = RFCOMMThread(_state)
-    _rfcomm_thread.start()
 
     dispatcher = ATEventDispatcher(_state)
     _dispatcher_task = asyncio.create_task(dispatcher.run(), name="at-dispatcher")
