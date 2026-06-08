@@ -9,21 +9,20 @@ Android Phone (HFP Audio Gateway — has cellular)
         ↕  Bluetooth HFP
 Raspberry Pi / Linux (HFP Hands-Free Unit)
 ├── BlueZ 5         — Bluetooth stack, RFCOMM channel
-├── PipeWire        — SCO audio routing (auto when call active)
 └── hfp-mcp-server  — MCP server
     ├── dial / hangup via AT commands over RFCOMM
-    └── capture / playback via PipeWire SCO nodes
+    └── capture / playback over a direct SCO socket (BTPROTO_SCO)
 ```
 
-The phone sees the Pi as a Bluetooth hands-free device (like a car kit or Windows PC).  Once a call is active, PipeWire creates an audio source (phone mic → Pi) and sink (Pi → phone speaker).  The MCP tools let your AI agent capture audio for STT and inject TTS audio back into the call.
+The phone sees the Pi as a Bluetooth hands-free device (like a car kit or Windows PC).  Because this server registers its **own** HFP Hands-Free profile and owns the RFCOMM service-level connection, PipeWire's Bluetooth backend never manages the phone — so the server owns the **SCO audio link itself**: it opens a `BTPROTO_SCO` socket and bridges 8 kHz CVSD PCM in both directions (phone mic → Pi, Pi → phone speaker). No PipeWire/PulseAudio nodes are involved in call audio. The MCP tools let your AI agent capture audio for STT and inject TTS audio back into the call.
 
 ## Requirements
 
 | Component | Minimum |
 |-----------|---------|
 | OS | Raspberry Pi OS Bookworm, Ubuntu 22.04, or any Debian-based distro |
-| Bluetooth | Any BlueZ 5.x adapter (Pi 3/4/Zero 2W built-in) |
-| Audio | PipeWire + WirePlumber (default on Bookworm) |
+| Bluetooth | BlueZ 5.x adapter that routes **SCO over HCI** (Pi 3/4/Zero 2W built-in works) |
+| Audio | None for call audio — SCO is bridged directly over the HCI socket |
 | Python | 3.11+ |
 | Phone | Android — paired via standard Bluetooth settings |
 
@@ -37,7 +36,7 @@ cd phone-bluetooth-hfp-mcp
 sudo bash setup/install.sh
 ```
 
-The script installs system packages, configures BlueZ and WirePlumber, and creates a virtualenv. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …` works on any account, not just `pi`); override explicitly with `SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe — every step is idempotent.
+The script installs system packages, configures BlueZ, and creates a virtualenv. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …` works on any account, not just `pi`); override explicitly with `SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe — every step is idempotent.
 
 ### 2. Pair your phone
 
@@ -294,10 +293,6 @@ protection on, list every name/IP clients use to reach the Pi:
   Check with `sudo ss -tlnp | grep <port>` and start on free ports:
   `--port 8080 --status-port 8081`.
 
-**`br-connection-profile-unavailable` on connect**
-- PipeWire/WirePlumber must be running to register the HFP audio endpoint:
-  `systemctl --user status pipewire wireplumber` — start them if inactive.
-
 **Phone doesn't appear in scan_paired_devices**
 - Ensure phone is paired (`bluetoothctl devices`)
 - Ensure phone has "Phone audio" enabled in its Bluetooth settings for the Pi
@@ -307,10 +302,14 @@ protection on, list every name/IP clients use to reach the Pi:
 - Run `sudo btmon` while connecting to see the raw HFP exchange
 - Some phones (especially Samsung) initiate the handshake themselves — this is handled automatically
 
-**Audio nodes not found after call connects**
-- Verify PipeWire is running: `systemctl --user status pipewire wireplumber`
-- Check the WirePlumber config was installed: `ls /etc/wireplumber/wireplumber.conf.d/`
-- Run `pactl list short sources` while a call is active to see the nodes
+**`start_audio_capture` fails: "Could not establish SCO audio link"**
+- Call audio rides a direct SCO socket, **not** PipeWire — `pactl`/WirePlumber are
+  irrelevant here. The one requirement is that the controller routes **SCO over HCI**.
+- Confirm the call is still ACTIVE (`get_call_status` → `audio_active: true`) before
+  calling `start_audio_capture`; an SCO link can only be opened during an active call.
+- Verify SCO reaches the host: run `hciconfig hci0` (or `sudo btmon`) during an active
+  call and watch the `sco:` RX/TX counters increment. The Pi's built-in BCM adapter
+  routes SCO over HCI out of the box; some USB dongles need their SCO routing enabled.
 
 **Running without root**
 - Ensure your user is in the `bluetooth` group: `groups $USER`
@@ -348,8 +347,7 @@ src/hfp_mcp/
 │   ├── handshake.py   HFP 1.8 SLC handshake (HF- and AG-initiated)
 │   └── session.py     RFCOMMThread (blocking I/O) + ATEventDispatcher (async)
 ├── audio/
-│   ├── pipewire.py    Locate PipeWire SCO nodes via pactl
-│   └── capture.py     parec/pacat capture/playback + AudioManager registry
+│   └── sco.py         BTPROTO_SCO duplex bridge + AudioManager registry
 └── server.py          FastMCP app, lifespan, 10 MCP tools
 ```
 

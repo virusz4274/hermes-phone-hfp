@@ -1,1 +1,1 @@
-"""Audio capture and playback over the HFP SCO link via PipeWire."""
+"""Call audio capture and playback over a direct Bluetooth SCO socket."""

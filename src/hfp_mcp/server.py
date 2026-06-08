@@ -18,7 +18,10 @@ Thread "rfcomm-io"  (daemon)
   └─ writer: asyncio.run_coroutine_threadsafe(queue.get) → socket.sendall
 
 Thread pool (asyncio run_in_executor)
-  └─ blocking BlueZ D-Bus calls, PipeWire detection, parec/pacat start/stop
+  └─ blocking BlueZ D-Bus calls, SCO socket connect/teardown
+
+Thread "sco-<session>"  (daemon, per audio session)
+  └─ duplex SCO bridge: recv phone mic → capture ring; send playback → phone
 """
 
 from __future__ import annotations
@@ -38,8 +41,7 @@ import dbus.mainloop.glib
 from gi.repository import GLib
 from mcp.server.fastmcp import FastMCP
 
-from .audio.capture import AudioManager
-from .audio.pipewire import PipeWireDeviceLocator
+from .audio.sco import AudioManager, SCOAudioError
 from .bluez.agent import HFPAgent, register_agent
 from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile
@@ -307,13 +309,14 @@ async def get_call_status() -> dict:
 @mcp.tool()
 async def start_audio_capture(session_id: str) -> dict:
     """
-    Begin capturing SCO audio from the phone and prepare the playback stream.
+    Open the SCO audio link to the phone and start the duplex audio bridge.
 
-    The call must already be in ACTIVE state (audio_active=true).
-    Polls up to 10 s for PipeWire to create the HFP SCO audio nodes.
+    The call must already be in ACTIVE state (audio_active=true). This connects a
+    Bluetooth SCO socket directly (HF-initiated) and streams 8 kHz CVSD PCM — it
+    does not depend on PipeWire.
 
     session_id: arbitrary string to identify this capture session (e.g. "call1").
-    Returns ok=true with PipeWire node names, or ok=false with an error.
+    Returns ok=true once the SCO link is up, or ok=false with an error.
     """
     if not _state.audio_active:
         return {
@@ -327,25 +330,23 @@ async def start_audio_capture(session_id: str) -> dict:
     if not address:
         return {"ok": False, "error": "No connected phone address"}
 
-    locator = PipeWireDeviceLocator()
+    session = _audio_manager.create_session(session_id, address)
     loop = asyncio.get_event_loop()
-    source, sink = await loop.run_in_executor(
-        None, locator.wait_for_hfp_devices, address, 10.0
-    )
-    if not source or not sink:
+    try:
+        await loop.run_in_executor(None, session.start)
+    except SCOAudioError as exc:
+        _audio_manager.remove_session(session_id)
         return {
             "ok": False,
             "error": (
-                "HFP PipeWire audio nodes not found. "
-                "Ensure pipewire-pulse and wireplumber are running and the "
-                "headset-roles WirePlumber config includes hfp_hf."
+                f"{exc}. Confirm the call is still active and that the Bluetooth "
+                "controller routes SCO over HCI (hciconfig hci0 should show SCO "
+                "RX/TX counters during a call)."
             ),
         }
 
-    _state.set_pipewire_devices(source, sink)
-    session = _audio_manager.create_session(session_id, source, sink)
-    await loop.run_in_executor(None, session.start)
-    return {"ok": True, "source": source, "sink": sink}
+    _state.set_sco_connected(True)
+    return {"ok": True, "transport": "sco", "mtu": session.mtu}
 
 
 @mcp.tool()
@@ -394,6 +395,7 @@ async def stop_audio_capture(session_id: str) -> dict:
         return {"ok": False, "error": f"No session '{session_id}'"}
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _audio_manager.remove_session, session_id)
+    _state.set_sco_connected(False)
     return {"ok": True}
 
 

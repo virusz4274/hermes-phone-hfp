@@ -1,7 +1,7 @@
 [Unit]
 Description=HFP MCP Server (Bluetooth phone calling)
 Documentation=https://github.com/virusz4274/phone-bluetooth-hfp-mcp
-After=bluetooth.service pipewire.service wireplumber.service
+After=bluetooth.service
 Requires=bluetooth.service
 
 [Service]

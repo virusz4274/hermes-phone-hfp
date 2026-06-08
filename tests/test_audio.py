@@ -1,24 +1,22 @@
 """
-Tests for the parec/pacat audio routing helpers.
+Tests for the SCO audio bridge plumbing.
 
-These cover command construction and the capture/playback buffer plumbing
-without spawning real subprocesses or touching audio hardware.
+These cover the capture-ring chunking, the playback buffer / silence-fill, and
+the session registry without opening a real SCO socket or touching Bluetooth.
 """
 
 import base64
 
-from hfp_mcp.audio.capture import (
+from hfp_mcp.audio.sco import (
     CHUNK_BYTES,
     AudioManager,
-    AudioSession,
-    _pacat_cmd,
-    _parec_cmd,
+    SCOAudioSession,
 )
 from hfp_mcp.config import AUDIO_CHANNELS, AUDIO_CHUNK_FRAMES
 
 
 # ---------------------------------------------------------------------------
-# Command builders
+# Format
 # ---------------------------------------------------------------------------
 
 def test_chunk_bytes_matches_format():
@@ -26,62 +24,77 @@ def test_chunk_bytes_matches_format():
     assert CHUNK_BYTES == AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 2
 
 
-def test_parec_cmd_targets_node_and_format():
-    cmd = _parec_cmd("bluez_input.AA_BB_CC_DD_EE_FF.0")
-    assert cmd[0] == "parec"
-    # node name passed via -d
-    assert "-d" in cmd
-    assert cmd[cmd.index("-d") + 1] == "bluez_input.AA_BB_CC_DD_EE_FF.0"
-    assert "--format=s16le" in cmd
-    assert "--rate=8000" in cmd
-    assert "--channels=1" in cmd
-    assert "--raw" in cmd
-
-
-def test_pacat_cmd_targets_node_and_format():
-    cmd = _pacat_cmd("bluez_output.AA_BB_CC_DD_EE_FF.0")
-    assert cmd[0] == "pacat"
-    assert "--playback" in cmd
-    assert cmd[cmd.index("-d") + 1] == "bluez_output.AA_BB_CC_DD_EE_FF.0"
-    assert "--format=s16le" in cmd
-    assert "--rate=8000" in cmd
-    assert "--channels=1" in cmd
-    assert "--raw" in cmd
-
-
 # ---------------------------------------------------------------------------
-# Capture buffer plumbing (no subprocess)
+# Capture ring (no socket)
 # ---------------------------------------------------------------------------
 
 def test_get_chunk_returns_none_when_empty():
-    s = AudioSession("call1", "src", "snk")
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
     assert s.get_chunk() is None
     assert s.get_chunk_b64() is None
 
 
+def test_absorb_capture_accumulates_into_chunks():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    # Feed one full chunk's worth in small SCO-sized frames (48 B each).
+    payload = bytes((i % 256 for i in range(CHUNK_BYTES)))
+    for off in range(0, CHUNK_BYTES, 48):
+        s._absorb_capture(payload[off:off + 48])
+    # Exactly one chunk should be available, byte-identical to what went in.
+    chunk = s.get_chunk()
+    assert chunk == payload
+    assert s.get_chunk() is None  # remainder (< CHUNK_BYTES) not yet emitted
+
+
 def test_get_chunk_b64_roundtrip():
-    s = AudioSession("call1", "src", "snk")
-    pcm = b"\x01\x02\x03\x04"
-    s._capture_buf.append(pcm)
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    pcm = bytes((i % 256 for i in range(CHUNK_BYTES)))
+    s._absorb_capture(pcm)
     b64 = s.get_chunk_b64()
     assert base64.b64decode(b64) == pcm
-    # buffer drained
     assert s.get_chunk() is None
 
 
-def test_queue_playback_without_stream_raises():
-    s = AudioSession("call1", "src", "snk")
+# ---------------------------------------------------------------------------
+# Playback buffer / silence fill (no socket)
+# ---------------------------------------------------------------------------
+
+def test_queue_playback_without_link_raises():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
     try:
         s.queue_playback(b"\x00\x01")
-        assert False, "expected RuntimeError when playback stream not running"
+        assert False, "expected RuntimeError when SCO link not running"
     except RuntimeError:
         pass
 
 
 def test_queue_playback_empty_is_noop():
-    s = AudioSession("call1", "src", "snk")
-    # empty input must not touch the (absent) stream
-    s.queue_playback(b"")
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    s.queue_playback(b"")  # must not raise even though the link is down
+
+
+def test_take_playback_silence_when_empty():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    assert s._take_playback(48) == b"\x00" * 48
+
+
+def test_take_playback_pads_partial_frame_with_silence():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    with s._pb_lock:
+        s._playback.extend(b"\x11\x22\x33")
+    out = s._take_playback(6)
+    assert out == b"\x11\x22\x33\x00\x00\x00"
+    # buffer drained
+    assert s._take_playback(2) == b"\x00\x00"
+
+
+def test_take_playback_returns_queued_bytes_in_order():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    with s._pb_lock:
+        s._playback.extend(bytes(range(10)))
+    assert s._take_playback(4) == bytes([0, 1, 2, 3])
+    assert s._take_playback(4) == bytes([4, 5, 6, 7])
+    assert s._take_playback(4) == bytes([8, 9, 0, 0])  # padded
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +103,7 @@ def test_queue_playback_empty_is_noop():
 
 def test_manager_create_get_remove():
     m = AudioManager()
-    s = m.create_session("call1", "src", "snk")
+    s = m.create_session("call1", "AA:BB:CC:DD:EE:FF")
     assert m.get_session("call1") is s
     m.remove_session("call1")  # stop() is a no-op since nothing started
     assert m.get_session("call1") is None
@@ -98,9 +111,9 @@ def test_manager_create_get_remove():
 
 def test_manager_rejects_duplicate_session():
     m = AudioManager()
-    m.create_session("call1", "src", "snk")
+    m.create_session("call1", "AA:BB:CC:DD:EE:FF")
     try:
-        m.create_session("call1", "src", "snk")
+        m.create_session("call1", "AA:BB:CC:DD:EE:FF")
         assert False, "expected ValueError on duplicate session"
     except ValueError:
         pass

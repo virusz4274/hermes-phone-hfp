@@ -45,9 +45,8 @@ class HFPState:
     indicators: dict = field(default_factory=dict)
 
     # -- Audio --
-    audio_active: bool = False
-    pipewire_source_name: Optional[str] = None
-    pipewire_sink_name: Optional[str] = None
+    audio_active: bool = False    # SCO link reported up by the phone (+CIEV call=1)
+    sco_connected: bool = False   # our SCO socket bridge is open and streaming
 
     # -- Call timing --
     call_started_at: Optional[float] = None  # time.monotonic() when call became ACTIVE
@@ -86,8 +85,7 @@ class HFPState:
             self.call_state = CallState.IDLE
             self.call_started_at = None
             self.audio_active = False
-            self.pipewire_source_name = None
-            self.pipewire_sink_name = None
+            self.sco_connected = False
             self.indicators = {}
         self._notify_change()
 
@@ -105,10 +103,9 @@ class HFPState:
             self.audio_active = active
         self._notify_change()
 
-    def set_pipewire_devices(self, source: str, sink: str) -> None:
+    def set_sco_connected(self, connected: bool) -> None:
         with self._lock:
-            self.pipewire_source_name = source
-            self.pipewire_sink_name = sink
+            self.sco_connected = connected
         self._notify_change()
 
     def snapshot(self) -> dict:
@@ -122,8 +119,7 @@ class HFPState:
                 "connected_address": self.connected_address,
                 "call_state": self.call_state.value,
                 "audio_active": self.audio_active,
-                "pipewire_source": self.pipewire_source_name,
-                "pipewire_sink": self.pipewire_sink_name,
+                "sco_connected": self.sco_connected,
                 "call_duration_seconds": duration,
             }
 

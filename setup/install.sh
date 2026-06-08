@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 # install.sh — One-shot setup for HFP MCP server on Raspberry Pi OS Bookworm
-#              (or any Debian/Ubuntu system with BlueZ 5 + PipeWire)
+#              (or any Debian/Ubuntu system with BlueZ 5)
+#
+# Call audio is bridged directly over a Bluetooth SCO socket — no PipeWire /
+# PulseAudio / WirePlumber configuration is required.
 #
 # Run as root (or with sudo):  sudo bash setup/install.sh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,10 +25,6 @@ apt-get install -y \
     libdbus-1-dev \
     libglib2.0-dev \
     libbluetooth-dev \
-    pipewire \
-    pipewire-pulse \
-    wireplumber \
-    pulseaudio-utils \
     python3-pip \
     python3-venv \
     libcairo2-dev
@@ -49,18 +48,15 @@ if ! grep -q '^Experimental' "$BLUEZ_CONF" 2>/dev/null; then
     printf '\n[General]\nExperimental=true\n' >> "$BLUEZ_CONF"
 fi
 
-echo "==> Configuring WirePlumber for HFP"
-mkdir -p /etc/wireplumber/wireplumber.conf.d
-cp "$SCRIPT_DIR/99-hfp-audio.conf" /etc/wireplumber/wireplumber.conf.d/
-chmod 644 /etc/wireplumber/wireplumber.conf.d/99-hfp-audio.conf
+# NOTE: We deliberately do NOT configure WirePlumber's bluez5 headset-roles for
+# hfp_hf. This server registers its own HFP Hands-Free profile and owns the
+# RFCOMM link; letting WirePlumber also claim hfp_hf would make its backend
+# compete for the same service-level connection. Call audio is handled by a
+# direct SCO socket, so no WirePlumber HFP config is needed.
 
 echo "==> Enabling services"
 systemctl enable bluetooth
 systemctl restart bluetooth
-# WirePlumber runs in the service user's session, not root's — enable it there.
-sudo -u "$SERVICE_USER" \
-    XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" \
-    systemctl --user enable wireplumber 2>/dev/null || true
 
 echo "==> Installing Python package"
 # Install into a virtual environment in the repo
