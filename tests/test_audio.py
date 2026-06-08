@@ -9,9 +9,11 @@ import base64
 
 from hfp_mcp.audio.sco import (
     CHUNK_BYTES,
+    STREAM_FRAME_BYTES,
     AudioManager,
     SCOAudioSession,
 )
+from hfp_mcp.audio.sidecar import AudioStreamServer
 from hfp_mcp.config import AUDIO_CHANNELS, AUDIO_CHUNK_FRAMES
 
 
@@ -22,6 +24,11 @@ from hfp_mcp.config import AUDIO_CHANNELS, AUDIO_CHUNK_FRAMES
 def test_chunk_bytes_matches_format():
     # 200 ms @ 8 kHz mono, int16 (2 bytes/sample)
     assert CHUNK_BYTES == AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 2
+
+
+def test_stream_frame_bytes_is_low_latency():
+    # 40 ms @ 8 kHz mono, int16 (2 bytes/sample)
+    assert STREAM_FRAME_BYTES == 640
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +60,16 @@ def test_get_chunk_b64_roundtrip():
     b64 = s.get_chunk_b64()
     assert base64.b64decode(b64) == pcm
     assert s.get_chunk() is None
+
+
+def test_pop_stream_frame_returns_small_pcm_frames():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    pcm = bytes((i % 256 for i in range(STREAM_FRAME_BYTES * 2)))
+    s._absorb_capture(pcm)
+
+    assert s.pop_stream_frame() == pcm[:STREAM_FRAME_BYTES]
+    assert s.pop_stream_frame() == pcm[STREAM_FRAME_BYTES:]
+    assert s.pop_stream_frame() is None
 
 
 # ---------------------------------------------------------------------------
@@ -117,3 +134,15 @@ def test_manager_rejects_duplicate_session():
         assert False, "expected ValueError on duplicate session"
     except ValueError:
         pass
+
+
+def test_audio_stream_server_issues_session_tokens_and_metadata():
+    m = AudioManager()
+    server = AudioStreamServer(m, "127.0.0.1", 8765)
+    token = server.issue_token("call1")
+
+    assert token
+    assert server._token_ok("call1", token)
+    assert not server._token_ok("call1", "wrong")
+    assert "/audio/call1?token=" in server.stream_url("call1", token)
+    assert server.metadata()["frame_bytes"] == STREAM_FRAME_BYTES

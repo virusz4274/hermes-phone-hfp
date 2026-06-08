@@ -42,9 +42,11 @@ from gi.repository import GLib
 from mcp.server.fastmcp import FastMCP
 
 from .audio.sco import AudioManager, SCOAudioError
+from .audio.sidecar import AudioStreamServer
 from .bluez.agent import HFPAgent, register_agent
 from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile
+from .config import AUDIO_STREAM_HOST, AUDIO_STREAM_PORT
 from .hfp.handshake import HFPHandshaker, HandshakeError
 from .hfp.protocol import CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
@@ -61,6 +63,7 @@ STATE_FILE = Path("/tmp/hfp-mcp-state.json")
 
 _state = HFPState()
 _audio_manager = AudioManager()
+_audio_stream_server: AudioStreamServer | None = None
 _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
 _dispatcher_task: asyncio.Task | None = None
@@ -161,6 +164,8 @@ async def _start_bluetooth_stack() -> None:
 def _stop_bluetooth_stack() -> None:
     """Tear down the GLib loop and audio. Called once at process shutdown."""
     global _glib_loop
+    if _audio_stream_server is not None:
+        _audio_stream_server.stop()
     _audio_manager.stop_all()
     if _glib_loop is not None:
         _glib_loop.quit()
@@ -301,7 +306,8 @@ async def get_call_status() -> dict:
 
     connection: disconnected | handshaking | connected
     call_state: idle | dialing | ringing | active | ending
-    audio_active: true when the SCO audio link is up (call is ACTIVE)
+    audio_active: true when the phone reports active call audio
+    sco_connected: true when this server has opened the SCO audio bridge
     """
     return _state.snapshot()
 
@@ -309,22 +315,119 @@ async def get_call_status() -> dict:
 @mcp.tool()
 async def start_audio_capture(session_id: str) -> dict:
     """
-    Open the SCO audio link to the phone and start the duplex audio bridge.
+    Open the SCO audio link and enable legacy base64 audio chunk tools.
 
     The call must already be in ACTIVE state (audio_active=true). This connects a
     Bluetooth SCO socket directly (HF-initiated) and streams 8 kHz CVSD PCM — it
     does not depend on PipeWire.
 
     session_id: arbitrary string to identify this capture session (e.g. "call1").
-    Returns ok=true once the SCO link is up, or ok=false with an error.
+    Returns ok=true once the SCO bridge is open, or ok=false with an error.
     """
+    if _audio_manager.get_session(session_id):
+        return {"ok": False, "error": f"Session '{session_id}' already exists"}
+
+    result = await _open_audio_session(session_id)
+    if not result["ok"]:
+        return result
+
+    _state.set_sco_connected(True)
+    return {"ok": True, "transport": "sco", "mtu": result["mtu"]}
+
+
+@mcp.tool()
+async def start_audio_stream(session_id: str) -> dict:
+    """
+    Start or reuse a call audio session and return a WebSocket stream endpoint.
+
+    The WebSocket is the realtime audio plane. It sends and receives binary PCM:
+    8 kHz, signed 16-bit, mono. Use MCP tools for call control; use this stream
+    for STT/TTS or live voice agents. The call must already be ACTIVE.
+    """
+    global _audio_stream_server
+
+    session = _audio_manager.get_session(session_id)
+    if session is None:
+        result = await _open_audio_session(session_id)
+        if not result["ok"]:
+            return result
+        session = _audio_manager.get_session(session_id)
+        _state.set_sco_connected(True)
+    if session is None:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    if _audio_stream_server is None:
+        return {"ok": False, "error": "Audio stream sidecar is not configured"}
+
+    _audio_stream_server.start()
+    token = _audio_stream_server.issue_token(session_id)
+    return {
+        "ok": True,
+        "transport": "websocket",
+        "stream_url": _audio_stream_server.stream_url(session_id, token),
+        "session_id": session_id,
+        "mtu": session.mtu,
+        "audio": _audio_stream_server.metadata(),
+        "direction": "duplex",
+        "message_format": "binary PCM frames in both directions",
+    }
+
+
+@mcp.tool()
+async def get_audio_chunk(session_id: str) -> dict:
+    """
+    Return the next legacy base64 audio chunk from the phone microphone.
+
+    Audio format: 8 kHz, 16-bit signed mono PCM, base64-encoded.
+    Returns audio_b64=null if no new audio is available yet (buffer empty).
+    Prefer start_audio_stream for realtime STT/TTS.
+    """
+    session = _audio_manager.get_session(session_id)
+    if not session:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    audio_b64 = session.get_chunk_b64()
+    return {"ok": True, "audio_b64": audio_b64}
+
+
+@mcp.tool()
+async def play_audio(session_id: str, audio_b64: str) -> dict:
+    """
+    Queue legacy base64-encoded PCM audio into the call.
+
+    Audio must be 8 kHz, 16-bit signed mono PCM.
+    Prefer start_audio_stream for realtime TTS/live voice agents.
+
+    audio_b64: base64-encoded raw PCM bytes.
+    Returns bytes_queued on success.
+    """
+    session = _audio_manager.get_session(session_id)
+    if not session:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    try:
+        loop = asyncio.get_event_loop()
+        n = await loop.run_in_executor(None, session.queue_playback_b64, audio_b64)
+        return {"ok": True, "bytes_queued": n}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@mcp.tool()
+async def stop_audio_capture(session_id: str) -> dict:
+    """Stop the SCO audio session and free capture/playback resources."""
+    session = _audio_manager.get_session(session_id)
+    if not session:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _audio_manager.remove_session, session_id)
+    _state.set_sco_connected(False)
+    return {"ok": True}
+
+
+async def _open_audio_session(session_id: str) -> dict:
     if not _state.audio_active:
         return {
             "ok": False,
             "error": "No active call audio — wait for call_state=active",
         }
-    if _audio_manager.get_session(session_id):
-        return {"ok": False, "error": f"Session '{session_id}' already exists"}
 
     address = _state.connected_address
     if not address:
@@ -344,59 +447,7 @@ async def start_audio_capture(session_id: str) -> dict:
                 "RX/TX counters during a call)."
             ),
         }
-
-    _state.set_sco_connected(True)
     return {"ok": True, "transport": "sco", "mtu": session.mtu}
-
-
-@mcp.tool()
-async def get_audio_chunk(session_id: str) -> dict:
-    """
-    Return the next captured audio chunk from the phone microphone.
-
-    Audio format: 8 kHz, 16-bit signed mono PCM, base64-encoded.
-    Returns audio_b64=null if no new audio is available yet (buffer empty).
-    Call this repeatedly to stream audio to your STT engine.
-    """
-    session = _audio_manager.get_session(session_id)
-    if not session:
-        return {"ok": False, "error": f"No session '{session_id}'"}
-    audio_b64 = session.get_chunk_b64()
-    return {"ok": True, "audio_b64": audio_b64}
-
-
-@mcp.tool()
-async def play_audio(session_id: str, audio_b64: str) -> dict:
-    """
-    Play base64-encoded PCM audio into the call (heard by the remote party).
-
-    Audio must be 8 kHz, 16-bit signed mono PCM.
-    Use this to inject TTS output from your AI agent into the phone call.
-
-    audio_b64: base64-encoded raw PCM bytes.
-    Returns bytes_queued on success.
-    """
-    session = _audio_manager.get_session(session_id)
-    if not session:
-        return {"ok": False, "error": f"No session '{session_id}'"}
-    try:
-        loop = asyncio.get_event_loop()
-        n = await loop.run_in_executor(None, session.queue_playback_b64, audio_b64)
-        return {"ok": True, "bytes_queued": n}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-
-@mcp.tool()
-async def stop_audio_capture(session_id: str) -> dict:
-    """Stop capturing and playing audio for this session and free resources."""
-    session = _audio_manager.get_session(session_id)
-    if not session:
-        return {"ok": False, "error": f"No session '{session_id}'"}
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _audio_manager.remove_session, session_id)
-    _state.set_sco_connected(False)
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +513,25 @@ def main() -> None:
         help="Port for the /status JSON endpoint used by the Hermes plugin on remote machines (default: 8001, streamable-http mode only)",
     )
     parser.add_argument(
+        "--audio-host",
+        default=AUDIO_STREAM_HOST,
+        help="Bind host for the realtime audio WebSocket sidecar (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--audio-port",
+        type=int,
+        default=AUDIO_STREAM_PORT,
+        help="Port for the realtime audio WebSocket sidecar (default: 8765)",
+    )
+    parser.add_argument(
+        "--audio-public-host",
+        default=None,
+        help=(
+            "Host/IP to place in returned audio WebSocket URLs. Useful when "
+            "--audio-host is 0.0.0.0 for remote LAN clients."
+        ),
+    )
+    parser.add_argument(
         "--allowed-host",
         action="append",
         metavar="HOST[:PORT]",
@@ -479,6 +549,14 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    global _audio_stream_server
+    _audio_stream_server = AudioStreamServer(
+        _audio_manager,
+        args.audio_host,
+        args.audio_port,
+        args.audio_public_host,
     )
 
     if args.transport == "streamable-http":
@@ -524,6 +602,11 @@ def main() -> None:
             "Status endpoint: http://%s:%d/status  (set HFP_MCP_STATUS_URL on remote Hermes host)",
             args.host,
             args.status_port,
+        )
+        log.info(
+            "Audio sidecar:   ws://%s:%d/audio/<session_id>",
+            args.audio_host,
+            args.audio_port,
         )
 
         # The FastMCP HTTP app's own lifespan only runs the MCP session

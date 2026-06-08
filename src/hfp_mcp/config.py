@@ -38,6 +38,12 @@ AUDIO_CHANNELS: int = 1
 AUDIO_DTYPE: str = "int16"
 AUDIO_CHUNK_FRAMES: int = 1600       # 200 ms at 8 kHz
 AUDIO_BUFFER_MAX_CHUNKS: int = 100   # ~20 s of ring buffer
+AUDIO_STREAM_FRAME_MS: int = 40      # low-latency binary stream frame size
+
+# Audio sidecar defaults. MCP remains the control plane; the sidecar carries
+# realtime PCM bytes for local voice agents.
+AUDIO_STREAM_HOST: str = "127.0.0.1"
+AUDIO_STREAM_PORT: int = 8765
 
 # Protocol timeouts
 AT_TIMEOUT_SECONDS: float = 5.0

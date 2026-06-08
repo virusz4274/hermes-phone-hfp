@@ -147,13 +147,13 @@ export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
 
 Or set it permanently in your shell profile / systemd environment.
 
-> **Security note:** The streamable-http and status ports are unauthenticated,
+> **Security note:** The streamable-http, status, and audio sidecar ports are unauthenticated,
 > and by default the server accepts any `Host` header (DNS-rebinding protection
 > off) so LAN clients can connect — see [Host header / remote clients](#host-header--remote-clients-421-misdirected-request).
 > Keep these ports on a private/home LAN. To restrict which hosts may connect,
 > pass `--allowed-host`. If you need remote access, use an SSH tunnel:
 > ```bash
-> ssh -L 8000:localhost:8000 -L 8001:localhost:8001 pi@raspberrypi.local
+> ssh -L 8000:localhost:8000 -L 8001:localhost:8001 -L 8765:localhost:8765 pi@raspberrypi.local
 > ```
 
 ## Server launch options
@@ -161,6 +161,8 @@ Or set it permanently in your shell profile / systemd environment.
 ```
 hfp-mcp-server [--transport stdio|streamable-http]
                [--host HOST] [--port PORT] [--status-port PORT]
+               [--audio-host HOST] [--audio-port PORT]
+               [--audio-public-host HOST]
                [--allowed-host HOST[:PORT] ...]
 ```
 
@@ -170,6 +172,9 @@ hfp-mcp-server [--transport stdio|streamable-http]
 | `--host` | `0.0.0.0` | http | Bind address. `0.0.0.0` = all interfaces (LAN-reachable); `127.0.0.1` = local only. |
 | `--port` | `8000` | http | Port for the MCP endpoint (`/mcp`). |
 | `--status-port` | `8001` | http | Port for the plain-JSON `/status` endpoint used by the Hermes plugin. |
+| `--audio-host` | `127.0.0.1` | both | Bind address for the realtime WebSocket audio sidecar. Keep loopback for same-machine Hermes; use `0.0.0.0` only on a trusted LAN or behind a tunnel. |
+| `--audio-port` | `8765` | both | Port for the realtime WebSocket audio sidecar. |
+| `--audio-public-host` | _(derived)_ | both | Host/IP used in returned `stream_url` values when the bind host is not directly usable, e.g. `--audio-host 0.0.0.0 --audio-public-host raspberrypi.local`. |
 | `--allowed-host` | _(none)_ | http | Host header value the server will accept (repeatable). Omit to **disable** DNS-rebinding protection so any LAN client connects; pass one or more to lock down. See [Host header / remote clients](#host-header--remote-clients-421-misdirected-request) below. |
 
 The Bluetooth stack (adapter, pairing agent, HFP profile) initialises at process
@@ -241,11 +246,12 @@ protection on, list every name/IP clients use to reach the Pi:
 | `disconnect_phone()` | Disconnect current phone |
 | `dial(number)` | Make an outgoing call, e.g. `"+14155551234"` |
 | `hangup()` | End the current call |
-| `get_call_status()` | Returns connection state, call state, audio_active |
-| `start_audio_capture(session_id)` | Start capturing SCO audio (call must be ACTIVE) |
-| `get_audio_chunk(session_id)` | Get next captured PCM chunk as base64 |
-| `play_audio(session_id, audio_b64)` | Inject base64 PCM audio into the call (TTS) |
-| `stop_audio_capture(session_id)` | Stop capture, free resources |
+| `get_call_status()` | Returns connection, call state, phone audio readiness, and SCO bridge state |
+| `start_audio_stream(session_id)` | Start/reuse SCO audio and return a duplex WebSocket for realtime STT/TTS |
+| `start_audio_capture(session_id)` | Start SCO audio for legacy base64 chunk tools (call must be ACTIVE) |
+| `get_audio_chunk(session_id)` | Get next legacy captured PCM chunk as base64 |
+| `play_audio(session_id, audio_b64)` | Queue legacy base64 PCM audio into the call |
+| `stop_audio_capture(session_id)` | Stop the SCO audio session and free resources |
 
 ### Audio format
 
@@ -254,6 +260,38 @@ protection on, list every name/IP clients use to reach the Pi:
 - **Bit depth**: 16-bit signed PCM
 - **Channels**: Mono
 - **Chunk size**: ~200 ms (1 600 frames)
+- **Realtime stream frame size**: 40 ms binary PCM frames over WebSocket
+
+### Realtime audio sidecar
+
+MCP is the control plane for call actions. Realtime audio should use the
+WebSocket sidecar returned by `start_audio_stream(session_id)`, not repeated
+large `play_audio` / `get_audio_chunk` tool calls.
+
+`start_audio_stream("call1")` opens the SCO audio session if needed and returns:
+
+```json
+{
+  "ok": true,
+  "transport": "websocket",
+  "stream_url": "ws://127.0.0.1:8765/audio/call1?token=...",
+  "audio": {
+    "encoding": "pcm_s16le",
+    "sample_rate_hz": 8000,
+    "channels": 1,
+    "frame_ms": 40,
+    "frame_bytes": 640
+  }
+}
+```
+
+Connect to `stream_url` and exchange binary messages:
+
+- Server → client: caller microphone PCM, suitable for STT or a live voice model.
+- Client → server: TTS/model PCM, injected into the phone call.
+
+The legacy base64 tools remain useful for compatibility and short diagnostics,
+but they are not the preferred path for realtime agents such as Hermes.
 
 ### Typical call flow
 
@@ -263,14 +301,16 @@ protection on, list every name/IP clients use to reach the Pi:
 3. get_call_status()              → wait for connection=connected
 4. dial("+15551234567")
 5. get_call_status()              → poll until call_state=active, audio_active=true
-6. start_audio_capture("call1")
+6. start_audio_stream("call1")       → connect STT/TTS or live voice agent to returned WebSocket
 7. loop:
-     chunk = get_audio_chunk("call1")  → base64 PCM → feed to STT
-     tts_audio = <your TTS engine>
-     play_audio("call1", tts_audio)    → caller hears your AI
+     WebSocket receive bytes → feed to STT / live model
+     WebSocket send TTS bytes → caller hears your AI
 8. hangup()
 9. stop_audio_capture("call1")
 ```
+
+`audio_active=true` means the phone reports active call audio. `sco_connected=true`
+means this server has opened the direct SCO audio bridge.
 
 ## Troubleshooting
 

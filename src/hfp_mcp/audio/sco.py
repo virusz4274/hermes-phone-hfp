@@ -36,12 +36,17 @@ from ..config import (
     AUDIO_BUFFER_MAX_CHUNKS,
     AUDIO_CHANNELS,
     AUDIO_CHUNK_FRAMES,
+    AUDIO_SAMPLE_RATE,
+    AUDIO_STREAM_FRAME_MS,
 )
 
 log = logging.getLogger(__name__)
 
 # Raw bytes per ~200 ms chunk: frames × channels × 2 (int16 = 2 bytes/sample).
 CHUNK_BYTES: int = AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 2
+STREAM_FRAME_BYTES: int = (
+    AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * 2 * AUDIO_STREAM_FRAME_MS // 1000
+)
 
 # Cap the outbound (playback) buffer so injected audio can't build up unbounded
 # latency — drop the oldest bytes past this many chunks' worth.
@@ -85,6 +90,8 @@ class SCOAudioSession:
         # capture ring (bridge thread = producer, asyncio = consumer)
         self._capture_buf: deque[bytes] = deque(maxlen=AUDIO_BUFFER_MAX_CHUNKS)
         self._capture_accum = bytearray()
+        self._stream_capture = bytearray()
+        self._stream_lock = threading.Lock()
         # outbound playback bytes (asyncio callers = producer, bridge = consumer)
         self._playback = bytearray()
         self._pb_lock = threading.Lock()
@@ -202,6 +209,11 @@ class SCOAudioSession:
             chunk = bytes(self._capture_accum[:CHUNK_BYTES])
             del self._capture_accum[:CHUNK_BYTES]
             self._capture_buf.append(chunk)  # deque.append is atomic
+        with self._stream_lock:
+            self._stream_capture.extend(frame)
+            overflow = len(self._stream_capture) - PLAYBACK_MAX_BYTES
+            if overflow > 0:
+                del self._stream_capture[:overflow]
 
     def _take_playback(self, n: int) -> bytes:
         """Pop up to `n` queued playback bytes, zero-padded to exactly `n` (silence)."""
@@ -229,6 +241,15 @@ class SCOAudioSession:
     def get_chunk_b64(self) -> Optional[str]:
         chunk = self.get_chunk()
         return base64.b64encode(chunk).decode("ascii") if chunk else None
+
+    def pop_stream_frame(self, n: int = STREAM_FRAME_BYTES) -> Optional[bytes]:
+        """Pop one low-latency PCM frame for realtime sidecar streaming."""
+        with self._stream_lock:
+            if len(self._stream_capture) < n:
+                return None
+            frame = bytes(self._stream_capture[:n])
+            del self._stream_capture[:n]
+            return frame
 
     # ------------------------------------------------------------------
     # Playback API
