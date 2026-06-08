@@ -236,7 +236,7 @@ src/hfp_mcp/
 │   └── session.py     RFCOMMThread (blocking I/O) + ATEventDispatcher (async)
 ├── audio/
 │   ├── pipewire.py    Locate PipeWire SCO nodes via pactl
-│   └── capture.py     sounddevice capture/playback + AudioManager registry
+│   └── capture.py     parec/pacat capture/playback + AudioManager registry
 └── server.py          FastMCP app, lifespan, 10 MCP tools
 ```
 

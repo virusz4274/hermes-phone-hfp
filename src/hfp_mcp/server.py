@@ -18,7 +18,7 @@ Thread "rfcomm-io"  (daemon)
   └─ writer: asyncio.run_coroutine_threadsafe(queue.get) → socket.sendall
 
 Thread pool (asyncio run_in_executor)
-  └─ blocking BlueZ D-Bus calls, PipeWire detection, sounddevice start/stop
+  └─ blocking BlueZ D-Bus calls, PipeWire detection, parec/pacat start/stop
 """
 
 from __future__ import annotations

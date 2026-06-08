@@ -1,11 +1,14 @@
 """
-SCO audio capture and playback via sounddevice (PipeWire / ALSA backend).
+SCO audio capture and playback for one HFP call.
 
-AudioSession manages one call's worth of audio I/O:
-  - InputStream  captures phone microphone → capture ring buffer
-  - OutputStream plays TTS audio → phone speaker
-
-AudioManager is a thread-safe registry of active sessions.
+We route audio with the PulseAudio/PipeWire CLI tools (``parec`` / ``pacat``)
+rather than PortAudio (sounddevice).  The HFP SCO link is exposed as a PipeWire
+node addressed by a PulseAudio-domain name (e.g. ``bluez_input.AA_BB_..._.0``)
+— exactly the name ``PipeWireDeviceLocator`` discovers via ``pactl``.  PortAudio
+cannot address an individual Pulse/PipeWire node by that name (it sees only the
+ALSA/`default`/`pulse` device), so passing such a name to it either fails or
+silently captures the wrong source.  ``parec``/``pacat`` take the node name with
+``-d`` and route to the right node every time.
 
 Audio format: 8 kHz, 16-bit signed mono PCM (HFP CVSD standard).
 """
@@ -14,31 +17,59 @@ from __future__ import annotations
 
 import base64
 import logging
+import subprocess
 import threading
 from collections import deque
 from typing import Optional
-
-import numpy as np
-import sounddevice as sd
 
 from ..config import (
     AUDIO_BUFFER_MAX_CHUNKS,
     AUDIO_CHANNELS,
     AUDIO_CHUNK_FRAMES,
-    AUDIO_DTYPE,
     AUDIO_SAMPLE_RATE,
 )
 
 log = logging.getLogger(__name__)
+
+# Raw bytes per ~200 ms chunk: frames × channels × 2 (int16 = 2 bytes/sample).
+CHUNK_BYTES: int = AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 2
+
+
+def _parec_cmd(device: str) -> list[str]:
+    """Build the ``parec`` (record) command for an 8 kHz s16le mono raw stream."""
+    return [
+        "parec",
+        "-d", device,
+        "--format=s16le",
+        f"--rate={AUDIO_SAMPLE_RATE}",
+        f"--channels={AUDIO_CHANNELS}",
+        "--raw",
+    ]
+
+
+def _pacat_cmd(device: str) -> list[str]:
+    """Build the ``pacat`` (playback) command for an 8 kHz s16le mono raw stream."""
+    return [
+        "pacat",
+        "--playback",
+        "-d", device,
+        "--format=s16le",
+        f"--rate={AUDIO_SAMPLE_RATE}",
+        f"--channels={AUDIO_CHANNELS}",
+        "--raw",
+    ]
 
 
 class AudioSession:
     """
     Manages SCO capture + playback for one logical call session.
 
-    Capture buffer: collections.deque (thread-safe single-producer/consumer).
-    Playback buffer: deque guarded by a Lock (multiple asyncio callers may
-    call queue_playback concurrently via run_in_executor).
+    Capture: ``parec`` writes raw PCM to stdout; a reader thread slices it into
+    fixed-size chunks and appends to a bounded ring buffer (deque with maxlen —
+    thread-safe for single-producer/consumer).
+    Playback: ``pacat`` reads raw PCM from stdin; queue_playback writes bytes
+    straight to it (guarded by a lock since multiple asyncio callers may write
+    concurrently via run_in_executor).  PipeWire handles playback buffering.
     """
 
     def __init__(self, session_id: str, source_name: str, sink_name: str) -> None:
@@ -47,57 +78,70 @@ class AudioSession:
         self._sink = sink_name
 
         self._capture_buf: deque[bytes] = deque(maxlen=AUDIO_BUFFER_MAX_CHUNKS)
-        self._playback_buf: deque[np.ndarray] = deque()
         self._pb_lock = threading.Lock()
+        self._stop = threading.Event()
 
-        self._in_stream: Optional[sd.InputStream] = None
-        self._out_stream: Optional[sd.OutputStream] = None
+        self._rec_proc: Optional[subprocess.Popen] = None
+        self._play_proc: Optional[subprocess.Popen] = None
+        self._reader: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Start / stop
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        self._in_stream = sd.InputStream(
-            device=self._source,
-            samplerate=AUDIO_SAMPLE_RATE,
-            channels=AUDIO_CHANNELS,
-            dtype=AUDIO_DTYPE,
-            blocksize=AUDIO_CHUNK_FRAMES,
-            callback=self._capture_cb,
+        self._rec_proc = subprocess.Popen(
+            _parec_cmd(self._source),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-        self._out_stream = sd.OutputStream(
-            device=self._sink,
-            samplerate=AUDIO_SAMPLE_RATE,
-            channels=AUDIO_CHANNELS,
-            dtype=AUDIO_DTYPE,
-            blocksize=AUDIO_CHUNK_FRAMES,
-            callback=self._playback_cb,
+        self._play_proc = subprocess.Popen(
+            _pacat_cmd(self._sink),
+            stdin=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-        self._in_stream.start()
-        self._out_stream.start()
-        log.info("Audio session %s started (src=%s, snk=%s)", self.session_id, self._source, self._sink)
+        self._reader = threading.Thread(
+            target=self._capture_loop, daemon=True, name=f"audio-rx-{self.session_id}"
+        )
+        self._reader.start()
+        log.info(
+            "Audio session %s started (src=%s, snk=%s)",
+            self.session_id, self._source, self._sink,
+        )
 
     def stop(self) -> None:
-        for stream in (self._in_stream, self._out_stream):
-            if stream:
-                try:
-                    stream.stop()
-                    stream.close()
-                except Exception as exc:
-                    log.debug("Stream close error: %s", exc)
-        self._in_stream = None
-        self._out_stream = None
+        self._stop.set()
+        with self._pb_lock:
+            play, self._play_proc = self._play_proc, None
+        rec, self._rec_proc = self._rec_proc, None
+        if play is not None:
+            try:
+                if play.stdin:
+                    play.stdin.close()
+            except OSError:
+                pass
+            _terminate(play)
+        if rec is not None:
+            _terminate(rec)
         log.info("Audio session %s stopped", self.session_id)
 
     # ------------------------------------------------------------------
     # Capture
     # ------------------------------------------------------------------
 
-    def _capture_cb(self, indata: np.ndarray, frames: int, time_info, status) -> None:
-        if status:
-            log.warning("Capture status: %s", status)
-        self._capture_buf.append(indata.tobytes())
+    def _capture_loop(self) -> None:
+        proc = self._rec_proc
+        if proc is None or proc.stdout is None:
+            return
+        while not self._stop.is_set():
+            # BufferedReader.read(n) returns exactly n bytes until EOF, giving
+            # uniform ~200 ms chunks.
+            data = proc.stdout.read(CHUNK_BYTES)
+            if not data:
+                if not self._stop.is_set():
+                    log.info("Audio capture stream ended for %s", self.session_id)
+                break
+            self._capture_buf.append(data)
 
     def get_chunk(self) -> Optional[bytes]:
         """Pop the oldest captured PCM chunk, or None if buffer is empty."""
@@ -110,31 +154,19 @@ class AudioSession:
     # Playback
     # ------------------------------------------------------------------
 
-    def _playback_cb(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
-        if status:
-            log.warning("Playback status: %s", status)
-        with self._pb_lock:
-            if self._playback_buf:
-                chunk = self._playback_buf.popleft()
-                needed = frames * AUDIO_CHANNELS
-                if len(chunk) < needed:
-                    chunk = np.pad(chunk, (0, needed - len(chunk)))
-                outdata[:] = chunk[:needed].reshape(outdata.shape)
-            else:
-                outdata.fill(0)   # silence when nothing queued
-
     def queue_playback(self, pcm_bytes: bytes) -> None:
-        """
-        Queue raw PCM bytes for playback into the call.
-
-        Splits the audio into AUDIO_CHUNK_FRAMES-sized slices so that the
-        playback callback (which processes one slice per invocation) plays
-        the full audio rather than truncating at the first chunk boundary.
-        """
-        arr = np.frombuffer(pcm_bytes, dtype=AUDIO_DTYPE)
+        """Write raw PCM bytes to the playback stream (heard by the remote party)."""
+        if not pcm_bytes:
+            return
         with self._pb_lock:
-            for i in range(0, max(len(arr), 1), AUDIO_CHUNK_FRAMES):
-                self._playback_buf.append(arr[i : i + AUDIO_CHUNK_FRAMES])
+            proc = self._play_proc
+            if proc is None or proc.stdin is None:
+                raise RuntimeError("Playback stream is not running")
+            try:
+                proc.stdin.write(pcm_bytes)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise RuntimeError(f"Playback stream write failed: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Convenience helpers (used by MCP tools)
@@ -148,6 +180,21 @@ class AudioSession:
         pcm = base64.b64decode(audio_b64)
         self.queue_playback(pcm)
         return len(pcm)
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Terminate a child process, escalating to kill if it doesn't exit."""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            log.warning("Audio subprocess (pid %s) did not exit", proc.pid)
 
 
 # ---------------------------------------------------------------------------

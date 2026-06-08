@@ -25,7 +25,7 @@ apt-get install -y \
     pipewire \
     pipewire-pulse \
     wireplumber \
-    portaudio19-dev \
+    pulseaudio-utils \
     python3-pip \
     python3-venv
 
