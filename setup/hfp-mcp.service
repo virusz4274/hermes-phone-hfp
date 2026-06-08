@@ -1,0 +1,27 @@
+[Unit]
+Description=HFP MCP Server (Bluetooth phone calling)
+Documentation=https://github.com/virusz4274/phone-bluetooth-hfp-mcp
+After=bluetooth.service pipewire.service wireplumber.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+User=pi
+Group=bluetooth
+
+# Path to the virtualenv created by install.sh
+ExecStart=/home/pi/phone-bluetooth-hfp-mcp/.venv/bin/hfp-mcp-server
+
+Restart=on-failure
+RestartSec=5
+
+# When running as a subprocess of a MCP client, remove these three lines
+# and let the client manage stdin/stdout directly.
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
