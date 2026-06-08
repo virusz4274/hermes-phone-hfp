@@ -23,11 +23,13 @@ Thread pool (asyncio run_in_executor)
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -353,12 +355,87 @@ async def stop_audio_capture(session_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Status HTTP server (SSE/network mode only)
+# ---------------------------------------------------------------------------
+
+def _make_status_server(host: str, port: int) -> HTTPServer:
+    """
+    Tiny HTTP server that serves GET /status → current HFP state as JSON.
+    Used by the Hermes plugin when Hermes runs on a different machine to the Pi.
+    """
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/status":
+                body = json.dumps(_state.snapshot()).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *_):  # suppress per-request noise
+            pass
+
+    return HTTPServer((host, port), _Handler)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="HFP MCP Server — Bluetooth phone calling for Linux/Raspberry Pi"
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help=(
+            "MCP transport: 'stdio' (default) for same-machine clients; "
+            "'sse' to serve over HTTP so remote machines can connect"
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Bind host for SSE transport (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for SSE MCP transport (default: 8000)",
+    )
+    parser.add_argument(
+        "--status-port",
+        type=int,
+        default=8001,
+        help="Port for the /status JSON endpoint used by the Hermes plugin on remote machines (default: 8001, SSE mode only)",
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    mcp.run("stdio")
+
+    if args.transport == "sse":
+        status_srv = _make_status_server(args.host, args.status_port)
+        status_thread = threading.Thread(
+            target=status_srv.serve_forever,
+            daemon=True,
+            name="status-http",
+        )
+        status_thread.start()
+        log.info(
+            "Status endpoint: http://%s:%d/status  (set HFP_MCP_STATUS_URL on remote Hermes host)",
+            args.host,
+            args.status_port,
+        )
+        mcp.run("sse", host=args.host, port=args.port)
+    else:
+        mcp.run("stdio")

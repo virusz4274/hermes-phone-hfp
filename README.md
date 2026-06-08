@@ -59,7 +59,20 @@ After this, the phone will auto-reconnect when the server starts.
 
 ### 3. Configure your MCP client
 
-Add to your MCP client config (e.g. Claude Desktop `~/.config/claude/claude_desktop_config.json`):
+There are two deployment models depending on where your AI app runs.
+
+---
+
+#### Model A — Same machine (Pi running Hermes / any MCP client)
+
+The MCP client spawns the server as a child process over **stdio**.
+
+```bash
+# Run directly
+.venv/bin/hfp-mcp-server
+
+# Or add to your MCP client config (e.g. Claude Desktop)
+```
 
 ```json
 {
@@ -71,11 +84,70 @@ Add to your MCP client config (e.g. Claude Desktop `~/.config/claude/claude_desk
 }
 ```
 
-Or run directly:
+Hermes `config.yaml`:
+```yaml
+mcp_servers:
+  - name: hfp-mcp
+    command: /home/pi/phone-bluetooth-hfp-mcp/.venv/bin/hfp-mcp-server
+
+plugins:
+  - hfp-call-awareness        # injects call context into every LLM turn
+```
+
+---
+
+#### Model B — Pi as Bluetooth gateway, AI app on another machine (Windows / Mac / Linux)
+
+The MCP server must run on the Pi (it owns the Bluetooth hardware), but the AI app (Hermes, Claude Desktop, etc.) runs on a different machine on the same network.
+
+**On the Pi** — start the server in SSE (HTTP) mode:
 
 ```bash
-.venv/bin/hfp-mcp-server
+.venv/bin/hfp-mcp-server --transport sse
+# MCP endpoint:    http://raspberrypi.local:8000/sse
+# Status endpoint: http://raspberrypi.local:8001/status
 ```
+
+You can customise the ports:
+```bash
+.venv/bin/hfp-mcp-server --transport sse --port 8000 --status-port 8001
+```
+
+**On the remote machine** — point your AI app at the Pi:
+
+Claude Desktop `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "hfp-phone": {
+      "url": "http://raspberrypi.local:8000/sse"
+    }
+  }
+}
+```
+
+Hermes `config.yaml`:
+```yaml
+mcp_servers:
+  - name: hfp-mcp
+    transport: sse
+    url: http://raspberrypi.local:8000/sse
+
+plugins:
+  - hfp-call-awareness
+```
+
+Hermes plugin — tell it where to fetch call status from the Pi:
+```bash
+export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
+```
+
+Or set it permanently in your shell profile / systemd environment.
+
+> **Security note:** The SSE and status ports are unauthenticated. Keep them on a private/home LAN. If you need remote access, use an SSH tunnel:
+> ```bash
+> ssh -L 8000:localhost:8000 -L 8001:localhost:8001 pi@raspberrypi.local
+> ```
 
 ## MCP Tools
 
