@@ -24,9 +24,11 @@ Thread pool (asyncio run_in_executor)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 import dbus
@@ -46,6 +48,8 @@ from .state import CallState, ConnectionState, HFPState
 
 log = logging.getLogger(__name__)
 
+STATE_FILE = Path("/tmp/hfp-mcp-state.json")
+
 # ---------------------------------------------------------------------------
 # Singletons — initialised during lifespan
 # ---------------------------------------------------------------------------
@@ -55,6 +59,14 @@ _audio_manager = AudioManager()
 _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
 _dispatcher_task: asyncio.Task | None = None
+
+
+def _write_state_file() -> None:
+    """Write a JSON snapshot of HFP state to STATE_FILE for the Hermes plugin."""
+    try:
+        STATE_FILE.write_text(json.dumps(_state.snapshot()))
+    except Exception as exc:
+        log.debug("State file write failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +83,8 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
     _state._asyncio_loop = loop
     _state._at_event_queue = asyncio.Queue()
     _state._at_cmd_queue = asyncio.Queue()
+    _state._on_change = _write_state_file
+    _write_state_file()  # write initial disconnected state
 
     # Initialise D-Bus with GLib integration BEFORE creating the SystemBus
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -118,6 +132,7 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
     finally:
         _audio_manager.stop_all()
         glib_loop.quit()
+        STATE_FILE.unlink(missing_ok=True)
         log.info("GLib MainLoop stopped")
 
 

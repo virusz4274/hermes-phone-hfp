@@ -1,0 +1,10 @@
+name: hfp-call-awareness
+version: "1.0.0"
+description: >
+  Injects active phone-call context into every Hermes LLM turn.
+  Reads the live HFP state written by hfp-mcp-server and tells the
+  LLM which call state it is in, how long the call has been running,
+  and which Bluetooth device is connected.
+entry_point: hermes_plugin
+hooks:
+  - pre_llm_call
