@@ -749,7 +749,7 @@ async def test_gemini_request_poll_dispatches_to_hermes(monkeypatch):
             "requests": [
                 {
                     "request_id": "req-1",
-                    "name": "ask_hermes",
+                    "name": "ask_mcp_client",
                     "arguments": {"task": "set a reminder", "context": "caller asked"},
                 }
             ],
@@ -765,7 +765,7 @@ async def test_gemini_request_poll_dispatches_to_hermes(monkeypatch):
     await adapter._poll_gemini_live_requests()
 
     assert adapter._pending_gemini_request_ids.popleft() == "req-1"
-    assert handled == ["Gemini Live asks Hermes: set a reminder\nContext: caller asked"]
+    assert handled == ["Gemini Live asks MCP client: set a reminder\nContext: caller asked"]
 
 
 def _install_fake_tools(monkeypatch, *, tts_module=None, transcription_module=None):

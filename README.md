@@ -429,8 +429,8 @@ HFP_PHONE_HOME_CHANNEL=+15551234567
 
 Gemini Live is an optional capability inside the same `hfp-mcp` MCP server. It
 is disabled by default. When disabled, missing an API key, or missing optional
-dependencies, the Gemini MCP tools are not registered, so agents and Hermes only
-see the classic phone tools.
+dependencies, the Gemini MCP tools are not registered, so MCP clients only see
+the classic phone tools.
 
 The installer includes the Gemini Live Python dependencies. Enable Gemini Live
 explicitly with:
@@ -450,7 +450,7 @@ Hermes voice mode is separate and defaults to classic STT/TTS:
 # classic: current Hermes STT/TTS behavior
 HFP_PHONE_VOICE_MODE=classic
 
-# gemini_live: Gemini owns call audio; Hermes passes text/results through MCP
+# gemini_live: Gemini owns call audio; an MCP client submits tool results
 HFP_PHONE_VOICE_MODE=gemini_live
 
 # auto: prefer Gemini when enabled and healthy, otherwise use classic
@@ -466,12 +466,47 @@ adds:
 | `stop_gemini_live_call(reason=None, hangup_after=false)` | Stop Gemini Live, optionally ending the call |
 | `get_gemini_live_status()` | Report availability, running state, model, and pending requests |
 | `send_gemini_live_text(text, urgency="normal", speak_to_caller=true)` | Send text/context/instructions into the active Live session |
-| `poll_gemini_live_requests(timeout_seconds=5)` | Let Hermes poll Gemini function calls needing Hermes/tool work |
-| `submit_gemini_live_result(request_id, result, speak_to_caller=true)` | Return Hermes/tool results to Gemini |
+| `poll_gemini_live_requests(timeout_seconds=5)` | Let an MCP client/orchestrator poll Gemini function calls needing outside work |
+| `get_gemini_live_pending_requests()` | Recover Gemini function calls already polled but not answered |
+| `submit_gemini_live_result(request_id, result, speak_to_caller=true)` | Return MCP client/tool results to Gemini |
 
-In Gemini mode, Hermes does not run STT/TTS for the call. Gemini streams caller
-audio directly and asks Hermes for tasks, memory, permissions, or actions through
-the MCP request/result tools above.
+In Gemini mode, Gemini streams caller audio directly and asks a connected MCP
+client/orchestrator for tasks, memory, permissions, or actions through the MCP
+request/result tools above. Hermes can be that polling client, but it is not
+required.
+
+### Gemini Live generic MCP orchestrator
+
+Gemini Live tool calls are callbacks: Gemini can ask for work with
+`ask_mcp_client`, but an MCP client must actually perform the action and submit
+the result. The generic orchestrator is a small reference client for that loop.
+
+```bash
+hfp-mcp-gemini-orchestrator \
+  --url http://127.0.0.1:8000/mcp \
+  --allowed-dir "$HOME" \
+  --allow-file-create
+```
+
+File creation is disabled unless `--allow-file-create` is passed, and writes
+are limited to the directories passed with `--allowed-dir`. Unsupported or
+unsafe requests are submitted to Gemini as failures instead of fake success.
+
+For a quick no-call smoke test while the MCP server is running:
+
+```bash
+hfp-mcp-gemini-orchestrator \
+  --url http://127.0.0.1:8000/mcp \
+  --allowed-dir "$HOME" \
+  --allow-file-create \
+  --once
+```
+
+If no Gemini request is pending, it prints:
+
+```text
+Handled 0 Gemini MCP request(s)
+```
 
 Use `.env` for connection/bootstrap values and secrets. Prefer `~/.hermes/config.yaml`
 for policy values such as caller roles and restart-notification behavior because

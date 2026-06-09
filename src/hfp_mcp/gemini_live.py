@@ -154,6 +154,20 @@ class GeminiLiveManager:
             "last_output_transcript": self._last_output_transcript or None,
         }
 
+    def pending_requests(self) -> dict:
+        """Return Gemini tool calls that have been polled but not answered.
+
+        poll_requests() moves tool calls from the live queue into _pending so a
+        client can answer them later with submit_result(). Generic MCP clients
+        may disconnect, crash, or poll in one process and submit from another;
+        this method makes those outstanding request IDs recoverable without
+        depending on any specific client implementation.
+        """
+        return {
+            "ok": True,
+            "requests": [item.to_dict() for item in self._pending.values()],
+        }
+
     async def start(self, session_id: str = "active-call", initial_context: str | None = None) -> dict:
         avail = availability()
         if not avail.get("available"):
@@ -284,8 +298,8 @@ class GeminiLiveManager:
         system_instruction = (
             "You are speaking on a cellular phone call through a Bluetooth "
             "hands-free gateway. Keep spoken responses brief and natural. "
-            "Use Hermes tools for tasks, memory, permissions, reminders, "
-            "or actions outside the call."
+            "Use the connected MCP client or orchestrator for tasks, context, "
+            "permissions, reminders, or actions outside the call."
         )
         if initial_context.strip():
             # Initial context is operator/developer context, not something to speak
@@ -418,10 +432,10 @@ def _samples_to_pcm(samples: list[int]) -> bytes:
 
 
 def _function_declarations() -> list[dict]:
-    return [
-        {
-            "name": "ask_hermes",
-            "description": "Ask Hermes to perform a task, check memory, or use tools.",
+    def ask_tool(name: str, client_label: str) -> dict:
+        return {
+            "name": name,
+            "description": f"Ask the connected {client_label} to perform a task, fetch data, or use tools.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -431,10 +445,12 @@ def _function_declarations() -> list[dict]:
                 },
                 "required": ["task"],
             },
-        },
-        {
-            "name": "notify_hermes",
-            "description": "Notify Hermes about call events, transcript snippets, or outcomes.",
+        }
+
+    def notify_tool(name: str, client_label: str) -> dict:
+        return {
+            "name": name,
+            "description": f"Notify the connected {client_label} about call events, transcript snippets, or outcomes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -445,10 +461,12 @@ def _function_declarations() -> list[dict]:
                 },
                 "required": ["event"],
             },
-        },
-        {
-            "name": "get_hermes_context",
-            "description": "Fetch relevant Hermes memory or task context.",
+        }
+
+    def context_tool(name: str, client_label: str) -> dict:
+        return {
+            "name": name,
+            "description": f"Fetch relevant context from the connected {client_label}.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -457,10 +475,12 @@ def _function_declarations() -> list[dict]:
                 },
                 "required": ["topic"],
             },
-        },
-        {
-            "name": "handoff_to_hermes",
-            "description": "Ask Hermes to take over an unclear, privileged, or long-running workflow.",
+        }
+
+    def handoff_tool(name: str, client_label: str) -> dict:
+        return {
+            "name": name,
+            "description": f"Ask the connected {client_label} to take over an unclear, privileged, or long-running workflow.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -469,5 +489,11 @@ def _function_declarations() -> list[dict]:
                 },
                 "required": ["reason"],
             },
-        },
+        }
+
+    return [
+        ask_tool("ask_mcp_client", "MCP client or orchestrator"),
+        notify_tool("notify_mcp_client", "MCP client or orchestrator"),
+        context_tool("get_mcp_client_context", "MCP client or orchestrator"),
+        handoff_tool("handoff_to_mcp_client", "MCP client or orchestrator"),
     ]

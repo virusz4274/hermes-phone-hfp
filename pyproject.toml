@@ -31,6 +31,7 @@ gemini-live = [
 
 [project.scripts]
 hfp-mcp-server = "hfp_mcp.server:main"
+hfp-mcp-gemini-orchestrator = "hfp_mcp.gemini_orchestrator:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hfp_mcp"]

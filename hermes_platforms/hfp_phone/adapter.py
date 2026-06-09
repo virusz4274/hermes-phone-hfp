@@ -109,15 +109,15 @@ def _classify_caller_role(
 def _format_gemini_request(request_item: dict) -> str:
     name = str(request_item.get("name") or "gemini_request")
     args = request_item.get("arguments") if isinstance(request_item.get("arguments"), dict) else {}
-    if name == "ask_hermes":
+    if name in {"ask_mcp_client", "ask_hermes"}:
         task = str(args.get("task") or "").strip()
         context = str(args.get("context") or "").strip()
-        return f"Gemini Live asks Hermes: {task}" + (f"\nContext: {context}" if context else "")
-    if name == "get_hermes_context":
-        return f"Gemini Live requests Hermes context: {args.get('topic') or ''}".strip()
-    if name == "handoff_to_hermes":
-        return f"Gemini Live requests Hermes handoff: {args.get('reason') or ''}".strip()
-    if name == "notify_hermes":
+        return f"Gemini Live asks MCP client: {task}" + (f"\nContext: {context}" if context else "")
+    if name in {"get_mcp_client_context", "get_hermes_context"}:
+        return f"Gemini Live requests MCP client context: {args.get('topic') or ''}".strip()
+    if name in {"handoff_to_mcp_client", "handoff_to_hermes"}:
+        return f"Gemini Live requests MCP client handoff: {args.get('reason') or ''}".strip()
+    if name in {"notify_mcp_client", "notify_hermes"}:
         return f"Gemini Live notification: {args.get('event') or ''}".strip()
     return f"Gemini Live request {name}: {json.dumps(args, sort_keys=True)}"
 

@@ -861,8 +861,8 @@ def _register_gemini_live_tools() -> bool:
         Start Gemini Live for the active call.
 
         Gemini owns the realtime HFP audio WebSocket while this session runs.
-        Hermes or other clients should exchange text/instructions through the
-        Gemini tools instead of opening the audio stream directly.
+        MCP clients or orchestrators should exchange text/instructions through
+        the Gemini tools instead of opening the audio stream directly.
         """
         return await _get_gemini_live_manager().start(session_id, initial_context)
 
@@ -894,8 +894,20 @@ def _register_gemini_live_tools() -> bool:
 
     @mcp.tool()
     async def poll_gemini_live_requests(timeout_seconds: float = 5.0) -> dict:
-        """Poll Gemini function calls waiting for Hermes/tool orchestration."""
+        """Poll Gemini function calls waiting for MCP-client/tool orchestration."""
         return await _get_gemini_live_manager().poll_requests(timeout_seconds)
+
+    @mcp.tool()
+    def get_gemini_live_pending_requests() -> dict:
+        """
+        Return Gemini function calls already polled but not yet answered.
+
+        Generic MCP clients should use this as a recovery/introspection tool:
+        poll_gemini_live_requests() reserves requests for later
+        submit_gemini_live_result(), and this tool exposes those reserved
+        request IDs if a client disconnects or needs to resume orchestration.
+        """
+        return _get_gemini_live_manager().pending_requests()
 
     @mcp.tool()
     async def submit_gemini_live_result(
@@ -903,7 +915,7 @@ def _register_gemini_live_tools() -> bool:
         result: str,
         speak_to_caller: bool = True,
     ) -> dict:
-        """Return a Hermes/tool result to Gemini for a pending function call."""
+        """Return an MCP client/tool result to Gemini for a pending function call."""
         return await _get_gemini_live_manager().submit_result(
             request_id,
             result,

@@ -90,8 +90,49 @@ def test_gemini_tools_present_when_enabled_configured_and_dependencies_exist(tmp
         "get_gemini_live_status",
         "send_gemini_live_text",
         "poll_gemini_live_requests",
+        "get_gemini_live_pending_requests",
         "submit_gemini_live_result",
     } <= tools
+
+
+async def test_pending_gemini_requests_remain_visible_after_poll():
+    async def ok(*_args):
+        return {"ok": True}
+
+    manager = gemini_live.GeminiLiveManager(
+        ensure_stream=ok,
+        clear_playback=ok,
+        hangup=ok,
+    )
+    request = gemini_live.GeminiRequest(
+        request_id="req-1",
+        function_call_id="fc-1",
+        name="ask_mcp_client",
+        arguments={"task": "check status"},
+        created_at=123.0,
+    )
+    await manager._requests.put(request)
+
+    first = await manager.poll_requests(timeout_seconds=0.01)
+    second = await manager.poll_requests(timeout_seconds=0.01)
+    pending = manager.pending_requests()
+
+    assert first["requests"] == [request.to_dict()]
+    assert second["requests"] == []
+    assert pending["requests"] == [request.to_dict()]
+    assert manager.status()["pending_requests"] == 1
+
+
+def test_gemini_function_declarations_include_generic_mcp_client_tools():
+    names = {item["name"] for item in gemini_live._function_declarations()}
+
+    assert {
+        "ask_mcp_client",
+        "notify_mcp_client",
+        "get_mcp_client_context",
+        "handoff_to_mcp_client",
+    } <= names
+    assert not ({"ask_hermes", "notify_hermes", "get_hermes_context", "handoff_to_hermes"} & names)
 
 
 def test_pcm_resampler_changes_sample_rate_size():
