@@ -14,6 +14,7 @@ import logging
 import secrets
 import socket
 import threading
+import time
 from typing import Optional
 
 import uvicorn
@@ -31,6 +32,7 @@ from ..config import (
 )
 
 log = logging.getLogger(__name__)
+TOKEN_TTL_SECONDS = 60.0
 
 
 class AudioStreamServer:
@@ -47,7 +49,7 @@ class AudioStreamServer:
         self.host = host
         self.port = port
         self._public_host = public_host
-        self._tokens: dict[str, str] = {}
+        self._tokens: dict[str, dict[str, float]] = {}
         self._tokens_lock = threading.Lock()
         self._started = threading.Event()
         self._server: Optional[uvicorn.Server] = None
@@ -100,7 +102,10 @@ class AudioStreamServer:
     def issue_token(self, session_id: str) -> str:
         token = secrets.token_urlsafe(24)
         with self._tokens_lock:
-            self._tokens[session_id] = token
+            self._purge_expired_tokens_locked()
+            self._tokens.setdefault(session_id, {})[token] = (
+                time.monotonic() + TOKEN_TTL_SECONDS
+            )
         return token
 
     def stream_url(self, session_id: str, token: str) -> str:
@@ -121,7 +126,20 @@ class AudioStreamServer:
 
     def _token_ok(self, session_id: str, token: str) -> bool:
         with self._tokens_lock:
-            return self._tokens.get(session_id) == token
+            self._purge_expired_tokens_locked()
+            return token in self._tokens.get(session_id, {})
+
+    def _purge_expired_tokens_locked(self) -> None:
+        now = time.monotonic()
+        empty_sessions = []
+        for session_id, tokens in self._tokens.items():
+            expired = [token for token, expires_at in tokens.items() if expires_at <= now]
+            for token in expired:
+                tokens.pop(token, None)
+            if not tokens:
+                empty_sessions.append(session_id)
+        for session_id in empty_sessions:
+            self._tokens.pop(session_id, None)
 
     def _make_app(self) -> Starlette:
         owner = self
@@ -133,9 +151,11 @@ class AudioStreamServer:
                 session_id = websocket.path_params["session_id"]
                 token = websocket.query_params.get("token", "")
                 if not owner._token_ok(session_id, token):
+                    log.warning("Rejecting HFP audio WebSocket for %s: invalid token", session_id)
                     await websocket.close(code=1008)
                     return
                 if owner._manager.get_session(session_id) is None:
+                    log.warning("Rejecting HFP audio WebSocket for %s: missing session", session_id)
                     await websocket.close(code=1008)
                     return
                 await websocket.accept()

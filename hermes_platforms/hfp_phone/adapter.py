@@ -58,6 +58,11 @@ HOME_CHAT_ALIASES = {"", "home", "hfp-phone", "hfp_phone", "owner"}
 ROLE_ADMIN = "admin"
 ROLE_TRUSTED = "trusted"
 ROLE_UNKNOWN = "unknown"
+CALL_SESSION_STATES = {"incoming", "dialing", "ringing", "active", "ending"}
+
+
+class HFPCallNoLongerActive(RuntimeError):
+    """Raised when a gateway reply arrives after the phone call/audio stream ended."""
 
 
 def _truthy(value: Any) -> bool:
@@ -102,6 +107,24 @@ def _looks_like_phone_number(value: str) -> bool:
 def _normalize_phone_target(value: str) -> str:
     value = value.strip().removeprefix("tel:").strip()
     return "".join(ch for ch in value if ch.isdigit() or ch == "+")
+
+
+def _strip_hfp_target_prefix(value: str) -> str:
+    raw = value.strip()
+    lower = raw.lower()
+    for prefix in ("hfp_phone:", "hfp-phone:"):
+        if lower.startswith(prefix):
+            return raw[len(prefix):].strip()
+    return raw
+
+
+def _is_hfp_call_session_id(value: str) -> bool:
+    raw = value.strip()
+    lower = raw.lower()
+    if not lower.startswith(("hfp-phone:", "hfp_phone:")):
+        return False
+    candidate = _strip_hfp_target_prefix(raw)
+    return not _looks_like_phone_number(candidate)
 
 
 def _rms_s16le(frame: bytes) -> float:
@@ -178,6 +201,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
     """Hermes platform adapter for one active HFP call at a time."""
 
     name = "hfp_phone"
+    SUPPORTS_MESSAGE_EDITING = False
     enforces_own_access_policy = True
 
     def __init__(self, config: PlatformConfig):
@@ -248,6 +272,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         self._active_chat_id = "hfp-phone"
         self._active_caller_id = "unknown"
         self._active_caller_role = ROLE_UNKNOWN
+        self._active_call_id: Optional[str] = None
         self._last_state = "disconnected"
         self._idle_hangup_task: Optional[asyncio.Task] = None
 
@@ -274,11 +299,19 @@ class HFPPhoneAdapter(BasePlatformAdapter):
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         if not str(content or "").strip():
             return SendResult(success=True, message_id=str(uuid.uuid4()))
+        chat_id_str = str(chat_id or "")
         try:
-            await self._ensure_outbound_call_for_send(str(chat_id or ""))
+            await self._ensure_outbound_call_for_send(chat_id_str)
             pcm = await _synthesize_pcm_for_call_async(str(content))
             await self._send_pcm(pcm)
             self._schedule_idle_hangup()
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
+        except HFPCallNoLongerActive as exc:
+            # A spoken reply can arrive after the caller hung up or while the SCO
+            # WebSocket is closing. Treat this as delivered/no-op for the gateway
+            # so BasePlatformAdapter does not retry with a plain-text fallback
+            # that would place a new call or speak stale diagnostic text.
+            log.info("HFP phone reply dropped because call audio ended: %s", exc)
             return SendResult(success=True, message_id=str(uuid.uuid4()))
         except Exception as exc:
             log.error("HFP phone send failed: %s", exc, exc_info=True)
@@ -302,7 +335,10 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         call_state = str(status.get("call_state") or "")
         connection = str(status.get("connection") or "")
         address = str(status.get("connected_address") or "unknown")
-        self._active_chat_id = f"hfp-phone:{address}"
+        if call_state in CALL_SESSION_STATES and self._active_call_id is None:
+            self._active_call_id = uuid.uuid4().hex[:12]
+        call_id = self._active_call_id or "idle"
+        self._active_chat_id = f"hfp-phone:{address}:{call_id}"
         self._active_caller_id = address
         self._active_caller_role = _classify_caller_role(
             address,
@@ -323,6 +359,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         if connection == "disconnected" or call_state == "idle":
             await self._stop_audio_stream()
             self._cancel_idle_hangup()
+            self._active_call_id = None
 
         self._last_state = call_state
 
@@ -363,7 +400,16 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             await self._start_audio_stream()
             if await self._wait_for_audio_ws():
                 return
-            raise RuntimeError("Call audio stream did not become ready")
+            raise HFPCallNoLongerActive("Call audio stream did not become ready")
+
+        # hfp-phone:<address> is an in-call session identity, not an outbound
+        # phone number. If the caller hung up before Hermes finished thinking,
+        # drop the spoken reply instead of falling through to the home-channel
+        # resolver and accidentally placing a fresh outbound call.
+        if _is_hfp_call_session_id(chat_id):
+            raise HFPCallNoLongerActive(
+                f"Call is no longer active (state: {status.get('call_state') or 'unknown'})"
+            )
 
         target = self._resolve_call_target(chat_id)
         if not target:
@@ -385,8 +431,9 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         raise RuntimeError("Call audio stream did not become ready")
 
     def _resolve_call_target(self, chat_id: str) -> str:
-        if _looks_like_phone_number(chat_id):
-            return _normalize_phone_target(chat_id)
+        candidate = _strip_hfp_target_prefix(chat_id)
+        if _looks_like_phone_number(candidate):
+            return _normalize_phone_target(candidate)
         if chat_id.strip().lower() in HOME_CHAT_ALIASES and self.owner_number:
             return _normalize_phone_target(self.owner_number)
         if chat_id == self.home_channel and self.owner_number:
@@ -494,11 +541,19 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             self._ws = None
 
     async def _send_pcm(self, pcm: bytes) -> None:
-        if self._ws is None or self._ws.closed:
-            raise RuntimeError("Call audio stream is not connected")
+        ws = self._ws
+        if ws is None or ws.closed:
+            raise HFPCallNoLongerActive("Call audio stream is not connected")
         frame_bytes = 640
         for offset in range(0, len(pcm), frame_bytes):
-            await self._ws.send_bytes(pcm[offset:offset + frame_bytes])
+            if ws.closed or ws is not self._ws:
+                raise HFPCallNoLongerActive("Call audio stream closed while sending")
+            try:
+                await ws.send_bytes(pcm[offset:offset + frame_bytes])
+            except Exception as exc:
+                raise HFPCallNoLongerActive(
+                    f"Call audio stream closed while sending: {exc}"
+                ) from exc
             await asyncio.sleep(0.04)
 
     async def _transcribe_and_dispatch(self, pcm: bytes) -> None:
@@ -526,6 +581,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
                 "source": "hfp-phone",
                 "hfp_caller_id": getattr(self, "_active_caller_id", "unknown"),
                 "hfp_role": getattr(self, "_active_caller_role", ROLE_UNKNOWN),
+                "hfp_call_id": getattr(self, "_active_call_id", None),
             },
         )
 
@@ -553,6 +609,10 @@ def _synthesize_pcm_for_call(text: str) -> bytes:
 
 async def _synthesize_pcm_for_call_async(text: str) -> bytes:
     return await asyncio.to_thread(_synthesize_pcm_for_call, text)
+
+
+async def _convert_audio_to_pcm_async(audio_path: Path) -> bytes:
+    return await asyncio.to_thread(_convert_audio_to_pcm, audio_path)
 
 
 def _synthesize_audio_file(text: str) -> Path:
@@ -670,6 +730,8 @@ async def _standalone_send(
     thread_id=None,
     media_files=None,
     force_document=False,
+    audio_file=None,
+    tail_ms=1000.0,
 ):
     mcp_url = (
         os.getenv("HFP_PHONE_MCP_URL")
@@ -682,9 +744,7 @@ async def _standalone_send(
     home_channel = os.getenv("HFP_PHONE_HOME_CHANNEL") or _config_value(
         pconfig, "home_channel", owner_number or "hfp-phone"
     )
-    session_id = os.getenv("HFP_PHONE_SESSION_ID") or _config_value(
-        pconfig, "session_id", "active-call"
-    )
+    session_id = f"hfp-call-{uuid.uuid4().hex}"
     timeout = float(
         os.getenv("HFP_PHONE_CALL_TIMEOUT_SECONDS")
         or _config_value(pconfig, "call_timeout_seconds", str(DEFAULT_CALL_TIMEOUT_SECONDS))
@@ -699,39 +759,105 @@ async def _standalone_send(
         return {"error": "No outbound phone target configured"}
 
     client = HFPControlClient(mcp_url)
-    result = await client.call_tool(
-        "dial_and_wait",
-        {"number": target, "timeout_seconds": timeout},
-    )
-    if not result.get("ok"):
-        return {"error": result.get("error") or f"Could not dial {target}"}
-
-    stream = await client.call_tool("ensure_audio_stream", {"session_id": session_id})
-    if not stream.get("ok"):
-        return {"error": stream.get("error") or "Could not start call audio stream"}
+    dialed = False
+    opened_audio = False
+    playback_attempted = False
+    audio_path: Path | None = None
+    local_audio_exists = False
+    pcm: bytes | None = None
 
     try:
-        pcm = await _synthesize_pcm_for_call_async(str(message))
-        await _send_pcm_to_stream_url(str(stream["stream_url"]), pcm)
-        if idle_hangup > 0:
+        if audio_file:
+            audio_path = Path(str(audio_file)).expanduser()
+            local_audio_exists = audio_path.exists() and audio_path.is_file()
+        else:
+            audio_path = await asyncio.to_thread(_synthesize_audio_file, str(message))
+            local_audio_exists = True
+
+        status = await client.call_tool("get_call_status")
+        if status.get("ok") is False:
+            return {"error": status.get("error") or "Could not read HFP call status"}
+
+        if status.get("call_state") == "active" and status.get("audio_active"):
+            pass
+        elif status.get("call_state") in (None, "", "idle"):
+            result = await client.call_tool(
+                "dial_and_wait",
+                {"number": target, "timeout_seconds": timeout},
+            )
+            if not result.get("ok"):
+                return {"error": result.get("error") or f"Could not dial {target}"}
+            dialed = True
+        else:
+            return {
+                "error": f"Already in call state: {status.get('call_state') or 'unknown'}"
+            }
+
+        result = await client.call_tool(
+            "play_audio_file",
+            {
+                "audio_file": str(audio_path),
+                "session_id": session_id,
+                "tail_ms": tail_ms,
+            },
+        )
+        playback_attempted = True
+        if result.get("ok"):
+            opened_audio = True
+        else:
+            # If Hermes generated the file on a different host than the MCP
+            # server, MCP cannot read that path. Fall back to streaming local
+            # converted PCM over a unique one-shot session.
+            error = str(result.get("error") or "")
+            if "not found" not in error.lower() and "not a file" not in error.lower():
+                if dialed:
+                    await client.call_tool("hangup")
+                    await client.call_tool("cleanup_audio_sessions")
+                return {"error": error or "Could not play audio file"}
+            if not local_audio_exists:
+                if dialed:
+                    await client.call_tool("hangup")
+                    await client.call_tool("cleanup_audio_sessions")
+                return {"error": error or f"Audio file not found: {audio_path}"}
+            pcm = await _convert_audio_to_pcm_async(audio_path)
+            stream = await client.call_tool(
+                "ensure_audio_stream", {"session_id": session_id}
+            )
+            if not stream.get("ok"):
+                if dialed:
+                    await client.call_tool("hangup")
+                    await client.call_tool("cleanup_audio_sessions")
+                return {
+                    "error": stream.get("error") or "Could not start call audio stream"
+                }
+            opened_audio = True
+            await _send_pcm_to_stream_url(str(stream["stream_url"]), pcm, tail_ms=tail_ms)
+
+        if dialed and idle_hangup > 0:
             await asyncio.sleep(idle_hangup)
             await client.call_tool("hangup")
         return {"success": True, "message_id": str(uuid.uuid4())}
     except Exception as exc:
+        if dialed:
+            await client.call_tool("hangup")
+            await client.call_tool("cleanup_audio_sessions")
         return {"error": str(exc)}
     finally:
-        await client.call_tool("stop_audio_capture", {"session_id": session_id})
+        if opened_audio or playback_attempted:
+            await client.call_tool("stop_audio_capture", {"session_id": session_id})
 
 
 async def _hfp_phone_call_tool(arguments: dict, task_id: str | None = None, **_kwargs) -> dict:
     number = str(arguments.get("number") or "").strip()
     message = str(arguments.get("message") or "").strip()
+    audio_file = str(arguments.get("audio_file") or "").strip()
+    tail_ms = float(arguments.get("tail_ms") or 1000.0)
     if not number:
         number = os.getenv("HFP_PHONE_OWNER_NUMBER", "").strip()
     if not number:
         return {"ok": False, "error": "Missing number and HFP_PHONE_OWNER_NUMBER"}
-    if not message:
-        message = "Hi, it's Hermes. I'm leaving this quick voice note and will continue in chat."
+    if not message and not audio_file:
+        return {"ok": False, "error": "Missing message or audio_file"}
 
     result = await _standalone_send(
         None,
@@ -740,6 +866,8 @@ async def _hfp_phone_call_tool(arguments: dict, task_id: str | None = None, **_k
         thread_id=None,
         media_files=None,
         force_document=False,
+        audio_file=audio_file or None,
+        tail_ms=tail_ms,
     )
     if result.get("success"):
         return {"ok": True, "message_id": result.get("message_id")}
@@ -747,8 +875,9 @@ async def _hfp_phone_call_tool(arguments: dict, task_id: str | None = None, **_k
 
 
 def _resolve_standalone_target(chat_id: str, owner_number: str, home_channel: str) -> str:
-    if _looks_like_phone_number(chat_id):
-        return _normalize_phone_target(chat_id)
+    candidate = _strip_hfp_target_prefix(chat_id)
+    if _looks_like_phone_number(candidate):
+        return _normalize_phone_target(candidate)
     if chat_id.strip().lower() in HOME_CHAT_ALIASES and owner_number:
         return _normalize_phone_target(owner_number)
     if chat_id == home_channel and owner_number:
@@ -758,14 +887,19 @@ def _resolve_standalone_target(chat_id: str, owner_number: str, home_channel: st
     return ""
 
 
-async def _send_pcm_to_stream_url(stream_url: str, pcm: bytes) -> None:
+async def _send_pcm_to_stream_url(
+    stream_url: str,
+    pcm: bytes,
+    *,
+    tail_ms: float = 1000.0,
+) -> None:
     try:
         import aiohttp
     except Exception as exc:
         raise RuntimeError(f"aiohttp is required for HFP phone audio: {exc}") from exc
 
     frame_bytes = 640
-    tail = b"\x00" * frame_bytes * 25  # ~1s of silence at 8kHz / 40ms frames
+    tail = b"\x00" * max(0, int(PCM_SAMPLE_RATE * PCM_CHANNELS * 2 * tail_ms / 1000))
     payload = pcm + tail
     async with aiohttp.ClientSession() as session:
         async with session.ws_connect(stream_url) as ws:
@@ -810,8 +944,16 @@ def register(ctx) -> None:
                     "type": "string",
                     "description": "Reminder or instruction text to speak after the call connects.",
                 },
+                "audio_file": {
+                    "type": "string",
+                    "description": "Server- or Hermes-local audio file to play over the call.",
+                },
+                "tail_ms": {
+                    "type": "number",
+                    "description": "Silence tail to append after playback, in milliseconds.",
+                },
             },
-            "required": ["message"],
+            "anyOf": [{"required": ["message"]}, {"required": ["audio_file"]}],
         },
         handler=_hfp_phone_call_tool,
         is_async=True,

@@ -31,7 +31,9 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -42,12 +44,17 @@ import dbus.mainloop.glib
 from gi.repository import GLib
 from mcp.server.fastmcp import FastMCP
 
-from .audio.sco import AudioManager, SCOAudioError
+from .audio.sco import AudioManager, SCOAudioError, STREAM_FRAME_BYTES
 from .audio.sidecar import AudioStreamServer
 from .bluez.agent import HFPAgent, register_agent
 from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile
-from .config import AUDIO_STREAM_HOST, AUDIO_STREAM_PORT
+from .config import (
+    AUDIO_CHANNELS,
+    AUDIO_SAMPLE_RATE,
+    AUDIO_STREAM_HOST,
+    AUDIO_STREAM_PORT,
+)
 from .hfp.handshake import HFPHandshaker, HandshakeError
 from .hfp.protocol import CMD_ATA, CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
@@ -648,6 +655,161 @@ async def cleanup_audio_sessions() -> dict:
     """
     stopped = await _cleanup_all_audio_sessions()
     return {"ok": True, "sessions_stopped": stopped}
+
+
+async def _ensure_audio_session(session_id: str) -> dict:
+    session = _audio_manager.get_session(session_id)
+    if session is not None:
+        return {"ok": True, "session": session, "session_reused": True}
+
+    result = await _open_audio_session(session_id)
+    if not result["ok"]:
+        return result
+
+    session = _audio_manager.get_session(session_id)
+    if session is None:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    _state.set_sco_connected(True)
+    return {"ok": True, "session": session, "session_reused": False}
+
+
+def _tail_silence(tail_ms: float) -> bytes:
+    if tail_ms <= 0:
+        return b""
+    byte_count = int(AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * 2 * tail_ms / 1000)
+    if byte_count % 2:
+        byte_count += 1
+    return b"\x00" * byte_count
+
+
+def _convert_audio_file_to_pcm(audio_path: Path) -> bytes:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio_path),
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
+        "-ar",
+        str(AUDIO_SAMPLE_RATE),
+        "-",
+    ]
+    proc = subprocess.run(cmd, check=True, capture_output=True)
+    return proc.stdout
+
+
+async def _queue_pcm_realtime(session, pcm: bytes) -> int:
+    if not pcm:
+        return 0
+
+    loop = asyncio.get_event_loop()
+    queued = 0
+    for offset in range(0, len(pcm), STREAM_FRAME_BYTES):
+        frame = pcm[offset:offset + STREAM_FRAME_BYTES]
+        await loop.run_in_executor(None, session.queue_playback, frame)
+        queued += len(frame)
+        await asyncio.sleep(0.04)
+    return queued
+
+
+@mcp.tool()
+async def play_audio_file(
+    audio_file: str,
+    session_id: str = "active-call",
+    tail_ms: float = 1000.0,
+) -> dict:
+    """
+    Convert a server-local audio file to HFP PCM and play it into active call
+    audio. This is the preferred one-shot playback path for normal MP3/WAV/OGG
+    files because MCP owns conversion and paced PCM queueing internally.
+
+    The call must already be active with audio_active=true. Use
+    dial_and_play_audio_file() when the tool should place the call first.
+    """
+    audio_path = Path(audio_file).expanduser()
+    if not audio_path.exists():
+        return {"ok": False, "error": f"Audio file not found: {audio_path}"}
+    if not audio_path.is_file():
+        return {"ok": False, "error": f"Audio path is not a file: {audio_path}"}
+
+    loop = asyncio.get_event_loop()
+    try:
+        pcm = await loop.run_in_executor(None, _convert_audio_file_to_pcm, audio_path)
+    except FileNotFoundError:
+        return {"ok": False, "error": "ffmpeg is not installed or not on PATH"}
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace").strip()
+        return {
+            "ok": False,
+            "error": f"ffmpeg conversion failed: {stderr or exc}",
+        }
+
+    result = await _ensure_audio_session(session_id)
+    if not result.get("ok"):
+        return result
+
+    payload = pcm + _tail_silence(tail_ms)
+    try:
+        bytes_queued = await _queue_pcm_realtime(result["session"], payload)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "session_reused": bool(result.get("session_reused")),
+        "bytes_pcm": len(pcm),
+        "tail_ms": tail_ms,
+        "bytes_queued": bytes_queued,
+    }
+
+
+@mcp.tool()
+async def dial_and_play_audio_file(
+    number: str,
+    audio_file: str,
+    session_id: str | None = None,
+    timeout_seconds: float = 30.0,
+    hangup_after: bool = False,
+    tail_ms: float = 1000.0,
+) -> dict:
+    """
+    Dial a number if needed, then play a server-local audio file over HFP audio.
+
+    If a call is already active and audio_active=true, this attaches to the
+    active call instead of failing with "Already in call state: active".
+    """
+    playback_session_id = session_id or f"hfp-call-{uuid.uuid4()}"
+    dialed = False
+
+    if _state.call_state == CallState.IDLE:
+        result = await dial_and_wait(number, timeout_seconds)
+        if not result.get("ok"):
+            return result
+        dialed = True
+    elif not (_state.call_state == CallState.ACTIVE and _state.audio_active):
+        return {
+            "ok": False,
+            "error": f"Already in call state: {_state.call_state.value}",
+        }
+
+    result = await play_audio_file(audio_file, playback_session_id, tail_ms)
+    if not result.get("ok"):
+        if dialed:
+            await hangup()
+            await cleanup_audio_sessions()
+        return {**result, "dialed": dialed}
+
+    if hangup_after:
+        await hangup()
+
+    return {**result, "dialed": dialed}
 
 
 async def _open_audio_session(session_id: str) -> dict:

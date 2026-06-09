@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from hermes_platforms.hfp_phone.adapter import (
+    HFPCallNoLongerActive,
     HFPPhoneAdapter,
     PCM_SAMPLE_RATE,
     check_requirements,
@@ -22,6 +23,7 @@ from hermes_platforms.hfp_phone.adapter import (
     _normalize_phone_target,
     _rms_s16le,
     _resolve_standalone_target,
+    _strip_hfp_target_prefix,
     _synthesize_audio_file,
     _split_csv,
     _standalone_send,
@@ -37,6 +39,10 @@ def test_split_csv_trims_and_skips_empty_values():
 
 def test_hfp_adapter_enforces_own_access_policy():
     assert HFPPhoneAdapter.enforces_own_access_policy is True
+
+
+def test_hfp_adapter_disables_message_edit_streaming():
+    assert HFPPhoneAdapter.SUPPORTS_MESSAGE_EDITING is False
 
 
 def test_classify_caller_role_prefers_admin_then_trusted():
@@ -83,6 +89,14 @@ def test_standalone_target_accepts_direct_number():
     )
 
 
+def test_standalone_target_accepts_hfp_prefixed_number():
+    assert (
+        _resolve_standalone_target("hfp_phone:+91 79076 86219", "", "hfp-phone")
+        == "+917907686219"
+    )
+    assert _strip_hfp_target_prefix("hfp-phone:+123") == "+123"
+
+
 class _FakeClient:
     def __init__(self):
         self.calls = 0
@@ -106,6 +120,7 @@ def _adapter_for_audio_tests():
     adapter.trusted_callers = set()
     adapter._active_caller_id = "unknown"
     adapter._active_caller_role = "unknown"
+    adapter._active_call_id = None
     adapter.call_timeout_seconds = 12.0
     adapter._running = True
     adapter.stream_runs = 0
@@ -277,8 +292,57 @@ async def test_send_pcm_fails_when_audio_stream_is_not_connected():
     adapter = _adapter_for_audio_tests()
     adapter._ws = None
 
-    with pytest.raises(RuntimeError, match="not connected"):
+    with pytest.raises(HFPCallNoLongerActive, match="not connected"):
         await adapter._send_pcm(b"\x00\x00")
+
+
+async def test_send_pcm_fails_cleanly_if_audio_stream_disappears_mid_send():
+    adapter = _adapter_for_audio_tests()
+
+    class _FakeWS:
+        closed = False
+
+        def __init__(self):
+            self.frames = 0
+
+        async def send_bytes(self, _frame):
+            self.frames += 1
+            adapter._ws = None
+
+    ws = _FakeWS()
+    adapter._ws = ws
+
+    with pytest.raises(HFPCallNoLongerActive, match="closed while sending"):
+        await adapter._send_pcm(b"\x00\x00" * 700)
+
+    assert ws.frames == 1
+
+
+async def test_send_drops_stale_inbound_reply_without_fallback_retry(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.status_url = "http://status.test/status"
+
+    class _FakeSendResult:
+        def __init__(self, success, message_id=None, error=None, retryable=None):
+            self.success = success
+            self.message_id = message_id
+            self.error = error
+            self.retryable = retryable
+
+    async def _idle_status(_url):
+        return {"call_state": "idle", "audio_active": False}
+
+    async def _should_not_synthesize(_text):  # pragma: no cover - assertion helper
+        raise AssertionError("stale inbound replies must not be synthesized")
+
+    monkeypatch.setattr(adapter_mod, "SendResult", _FakeSendResult)
+    monkeypatch.setattr(adapter_mod, "_read_json_url_async", _idle_status)
+    monkeypatch.setattr(adapter_mod, "_synthesize_pcm_for_call_async", _should_not_synthesize)
+
+    result = await adapter.send("hfp-phone:22:22:D2:F8:01:7A", "hello after hangup")
+
+    assert result.success is True
+    assert adapter._client.tool_calls == []
 
 
 def test_hfp_event_includes_caller_role_metadata(monkeypatch):
@@ -306,16 +370,70 @@ def test_hfp_event_includes_caller_role_metadata(monkeypatch):
     adapter._active_chat_id = "hfp-phone:22:22:D2:F8:01:7A"
     adapter._active_caller_id = "22:22:D2:F8:01:7A"
     adapter._active_caller_role = "trusted"
+    adapter._active_call_id = "call-1"
 
     event = adapter._event("hello")
 
     assert event.raw_message["source"] == "hfp-phone"
     assert event.raw_message["hfp_caller_id"] == "22:22:D2:F8:01:7A"
     assert event.raw_message["hfp_role"] == "trusted"
+    assert event.raw_message["hfp_call_id"] == "call-1"
 
 
-async def test_standalone_send_dials_streams_and_hangs_up(monkeypatch):
+async def test_handle_status_uses_one_hermes_session_per_call(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter._last_state = "idle"
+    adapter._stop_audio_stream = lambda: asyncio.sleep(0)
+    adapter._cancel_idle_hangup = lambda: None
+    adapter._start_audio_stream = lambda: asyncio.sleep(0)
+
+    await adapter._handle_status(
+        {
+            "connection": "connected",
+            "connected_address": "22:22:D2:F8:01:7A",
+            "call_state": "active",
+            "audio_active": True,
+        }
+    )
+    first_chat = adapter._active_chat_id
+    first_call = adapter._active_call_id
+
+    await adapter._handle_status(
+        {
+            "connection": "connected",
+            "connected_address": "22:22:D2:F8:01:7A",
+            "call_state": "active",
+            "audio_active": True,
+        }
+    )
+    assert adapter._active_chat_id == first_chat
+    assert adapter._active_call_id == first_call
+
+    await adapter._handle_status(
+        {
+            "connection": "connected",
+            "connected_address": "22:22:D2:F8:01:7A",
+            "call_state": "idle",
+            "audio_active": False,
+        }
+    )
+    assert adapter._active_call_id is None
+
+    await adapter._handle_status(
+        {
+            "connection": "connected",
+            "connected_address": "22:22:D2:F8:01:7A",
+            "call_state": "active",
+            "audio_active": True,
+        }
+    )
+    assert adapter._active_chat_id != first_chat
+
+
+async def test_standalone_send_dials_mcp_file_playback_and_hangs_up(monkeypatch, tmp_path):
     calls = []
+    audio_path = tmp_path / "tts.mp3"
+    audio_path.write_bytes(b"audio")
 
     class _Config:
         extra = {"auto_hangup_idle_seconds": "0.001"}
@@ -326,19 +444,12 @@ async def test_standalone_send_dials_streams_and_hangs_up(monkeypatch):
 
         async def call_tool(self, name, arguments=None):
             calls.append((name, arguments or {}))
-            if name == "ensure_audio_stream":
-                return {"ok": True, "stream_url": "ws://audio.test/call"}
+            if name == "get_call_status":
+                return {"call_state": "idle", "audio_active": False}
             return {"ok": True}
 
-    async def _send_pcm(_stream_url, _pcm):
-        calls.append(("send_pcm", {}))
-
     monkeypatch.setattr(adapter_mod, "HFPControlClient", _FakeStandaloneClient)
-    async def _synthesize(_text):
-        return b"pcm"
-
-    monkeypatch.setattr(adapter_mod, "_synthesize_pcm_for_call_async", _synthesize)
-    monkeypatch.setattr(adapter_mod, "_send_pcm_to_stream_url", _send_pcm)
+    monkeypatch.setattr(adapter_mod, "_synthesize_audio_file", lambda _text: audio_path)
 
     result = await _standalone_send(
         _Config(),
@@ -347,16 +458,143 @@ async def test_standalone_send_dials_streams_and_hangs_up(monkeypatch):
     )
 
     assert result["success"] is True
-    assert calls == [
-        (
-            "dial_and_wait",
-            {"number": "+123", "timeout_seconds": 45.0},
-        ),
-        ("ensure_audio_stream", {"session_id": "active-call"}),
-        ("send_pcm", {}),
-        ("hangup", {}),
-        ("stop_audio_capture", {"session_id": "active-call"}),
-    ]
+    assert calls[0] == ("get_call_status", {})
+    assert calls[1] == (
+        "dial_and_wait",
+        {"number": "+123", "timeout_seconds": 45.0},
+    )
+    assert calls[2][0] == "play_audio_file"
+    assert calls[2][1]["audio_file"] == str(audio_path)
+    assert calls[2][1]["session_id"].startswith("hfp-call-")
+    assert calls[3] == ("hangup", {})
+    assert calls[4] == (
+        "stop_audio_capture",
+        {"session_id": calls[2][1]["session_id"]},
+    )
+
+
+async def test_standalone_send_failure_after_dial_hangs_up_and_cleans(monkeypatch, tmp_path):
+    calls = []
+    audio_path = tmp_path / "tts.mp3"
+    audio_path.write_bytes(b"audio")
+
+    class _FakeStandaloneClient:
+        def __init__(self, _mcp_url):
+            pass
+
+        async def call_tool(self, name, arguments=None):
+            calls.append((name, arguments or {}))
+            if name == "get_call_status":
+                return {"call_state": "idle", "audio_active": False}
+            if name == "play_audio_file":
+                return {"ok": False, "error": "audio sidecar rejected token"}
+            return {"ok": True}
+
+    monkeypatch.setattr(adapter_mod, "HFPControlClient", _FakeStandaloneClient)
+    monkeypatch.setattr(adapter_mod, "_synthesize_audio_file", lambda _text: audio_path)
+
+    result = await _standalone_send(None, "+123", "hello")
+
+    assert result == {"error": "audio sidecar rejected token"}
+    session_id = next(
+        args["session_id"] for name, args in calls if name == "play_audio_file"
+    )
+    assert ("hangup", {}) in calls
+    assert ("cleanup_audio_sessions", {}) in calls
+    assert ("stop_audio_capture", {"session_id": session_id}) in calls
+
+
+async def test_standalone_send_failure_on_active_call_does_not_hang_up(monkeypatch, tmp_path):
+    calls = []
+    audio_path = tmp_path / "tts.mp3"
+    audio_path.write_bytes(b"audio")
+
+    class _FakeStandaloneClient:
+        def __init__(self, _mcp_url):
+            pass
+
+        async def call_tool(self, name, arguments=None):
+            calls.append((name, arguments or {}))
+            if name == "get_call_status":
+                return {"call_state": "active", "audio_active": True}
+            if name == "play_audio_file":
+                return {"ok": False, "error": "audio sidecar rejected token"}
+            return {"ok": True}
+
+    monkeypatch.setattr(adapter_mod, "HFPControlClient", _FakeStandaloneClient)
+    monkeypatch.setattr(adapter_mod, "_synthesize_audio_file", lambda _text: audio_path)
+
+    result = await _standalone_send(None, "+123", "hello")
+
+    assert result == {"error": "audio sidecar rejected token"}
+    assert ("hangup", {}) not in calls
+    assert ("cleanup_audio_sessions", {}) not in calls
+    session_id = next(
+        args["session_id"] for name, args in calls if name == "play_audio_file"
+    )
+    assert ("stop_audio_capture", {"session_id": session_id}) in calls
+
+
+async def test_standalone_send_audio_file_skips_tts(monkeypatch, tmp_path):
+    calls = []
+    audio_path = tmp_path / "message.mp3"
+    audio_path.write_bytes(b"audio")
+
+    class _FakeStandaloneClient:
+        def __init__(self, _mcp_url):
+            pass
+
+        async def call_tool(self, name, arguments=None):
+            calls.append((name, arguments or {}))
+            if name == "get_call_status":
+                return {"call_state": "active", "audio_active": True}
+            return {"ok": True}
+
+    def _should_not_tts(_text):  # pragma: no cover - assertion helper
+        raise AssertionError("audio_file should skip TTS")
+
+    monkeypatch.setattr(adapter_mod, "HFPControlClient", _FakeStandaloneClient)
+    monkeypatch.setattr(adapter_mod, "_synthesize_audio_file", _should_not_tts)
+
+    result = await _standalone_send(None, "+123", "", audio_file=str(audio_path))
+
+    assert result["success"] is True
+    assert ("dial_and_wait", {"number": "+123", "timeout_seconds": 45.0}) not in calls
+    assert calls[1][0] == "play_audio_file"
+    assert calls[1][1]["audio_file"] == str(audio_path)
+
+
+async def test_standalone_send_audio_file_can_be_mcp_local(monkeypatch):
+    calls = []
+
+    class _FakeStandaloneClient:
+        def __init__(self, _mcp_url):
+            pass
+
+        async def call_tool(self, name, arguments=None):
+            calls.append((name, arguments or {}))
+            if name == "get_call_status":
+                return {"call_state": "active", "audio_active": True}
+            return {"ok": True}
+
+    monkeypatch.setattr(adapter_mod, "HFPControlClient", _FakeStandaloneClient)
+
+    result = await _standalone_send(
+        None,
+        "+123",
+        "",
+        audio_file="/mnt/hfp-server/message.mp3",
+    )
+
+    assert result["success"] is True
+    assert calls[1] == (
+        "play_audio_file",
+        {
+            "audio_file": "/mnt/hfp-server/message.mp3",
+            "session_id": calls[1][1]["session_id"],
+            "tail_ms": 1000.0,
+        },
+    )
 
 
 async def test_start_audio_stream_does_not_duplicate_running_task():

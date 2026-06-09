@@ -313,6 +313,8 @@ protection on, list every name/IP clients use to reach the Pi:
 | `get_phone_context()` | Agent-friendly call summary with a recommended next action |
 | `start_audio_stream(session_id)` | Start/reuse SCO audio and return a duplex WebSocket for realtime STT/TTS |
 | `ensure_audio_stream(session_id="active-call")` | Start/reuse realtime audio with a stable default session id |
+| `play_audio_file(audio_file, session_id="active-call", tail_ms=1000)` | Convert and play a server-local audio file into active call audio |
+| `dial_and_play_audio_file(number, audio_file, session_id=None, timeout_seconds=30, hangup_after=false, tail_ms=1000)` | Dial or attach to active call, then play a server-local audio file |
 | `start_audio_capture(session_id)` | Deprecated/diagnostic: start SCO audio for legacy base64 chunk tools |
 | `get_audio_chunk(session_id)` | Deprecated/diagnostic: get next captured PCM chunk as base64 |
 | `play_audio(session_id, audio_b64)` | Deprecated/diagnostic: queue raw base64 PCM bytes into the call |
@@ -331,6 +333,12 @@ The high-level tools reduce repeated agent polling:
 - `dial_and_wait()` wraps `dial()` plus call/audio readiness waiting.
 - `ensure_audio_stream()` opens or reuses the realtime audio stream with a
   stable default session id.
+- `play_audio_file()` accepts normal audio files on the MCP server host, converts
+  them to HFP-compatible 8 kHz mono PCM with `ffmpeg`, and queues playback inside
+  MCP without a huge base64 payload or client-side WebSocket connection.
+- `dial_and_play_audio_file()` is the one-shot reminder/greeting helper: it
+  dials when idle, attaches when a call is already active, plays the file, and
+  can optionally hang up.
 - `get_phone_context()` returns an agent-friendly summary and recommended next
   action so models do not have to infer the workflow from raw state fields.
 
@@ -378,9 +386,10 @@ Connect to `stream_url` and exchange binary messages:
 The legacy base64 tools remain useful for compatibility and short diagnostics,
 but they are not the preferred path for realtime agents such as Hermes.
 `play_audio()` does not accept an audio file path or MP3/WAV data directly; it
-expects base64-encoded raw 8 kHz, signed 16-bit, mono PCM bytes. For normal AI
-speech playback, use the WebSocket stream returned by `ensure_audio_stream()`
-or the Hermes phone platform TTS bridge.
+expects base64-encoded raw 8 kHz, signed 16-bit, mono PCM bytes. For normal
+one-shot AI speech playback, prefer `play_audio_file()` or
+`dial_and_play_audio_file()`. For live duplex agents, use the WebSocket stream
+returned by `ensure_audio_stream()` or the Hermes phone platform TTS bridge.
 
 ### Hermes phone platform plugin
 
@@ -461,6 +470,20 @@ TTS, listens for follow-up while the call remains active, and hangs up after
 `HFP_PHONE_AUTO_HANGUP_IDLE_SECONDS` seconds of inactivity. With HFP-only
 calling, the reminder target must be a different number than the SIM in the
 paired gateway phone; a phone cannot dial itself through its own cellular line.
+
+Each cellular call is treated as a separate Hermes session. The plugin uses a
+per-call chat id such as `hfp-phone:<device-or-caller>:<call-id>` so a new phone
+call from the same Bluetooth device starts fresh context, while all turns inside
+the same call stay together. Stable caller metadata is still exposed in
+`raw_message.hfp_caller_id`, and the generated per-call id is exposed as
+`raw_message.hfp_call_id`.
+
+For direct Hermes sends, `hfp_phone`, `hfp-phone`, `home`, and `owner` resolve to
+the configured home/owner number. Explicit phone targets such as
+`hfp_phone:+917...`, `hfp-phone:+917...`, `tel:+917...`, or a direct phone-number
+chat id are also accepted. For explicit tool use, `hfp_phone_call` accepts either
+`message` text or an `audio_file` path; text uses Hermes TTS first, while
+`audio_file` skips TTS and is converted for HFP playback.
 
 ### Caller permissions status
 

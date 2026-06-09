@@ -164,6 +164,16 @@ def test_audio_stream_server_issues_session_tokens_and_metadata():
     assert server.metadata()["frame_bytes"] == STREAM_FRAME_BYTES
 
 
+def test_audio_stream_server_keeps_recent_session_tokens_valid():
+    server = AudioStreamServer(AudioManager(), "127.0.0.1", 8765)
+    first = server.issue_token("call1")
+    second = server.issue_token("call1")
+
+    assert first != second
+    assert server._token_ok("call1", first)
+    assert server._token_ok("call1", second)
+
+
 def test_audio_stream_server_uses_explicit_public_host_for_wildcard_bind():
     server = AudioStreamServer(AudioManager(), "0.0.0.0", 8765, "pi.local")
     token = server.issue_token("call1")
