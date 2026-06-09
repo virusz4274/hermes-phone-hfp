@@ -18,6 +18,7 @@ import asyncio
 import logging
 import socket
 import threading
+from typing import Callable, Optional
 
 from ..state import CallState, HFPState
 from .protocol import ATParser, ATResponse, ATResult, ATUnsolicited, URC_CIEV
@@ -118,8 +119,13 @@ class ATEventDispatcher:
     A None sentinel means the socket closed; we call set_disconnected and stop.
     """
 
-    def __init__(self, state: HFPState) -> None:
+    def __init__(
+        self,
+        state: HFPState,
+        on_call_ended: Optional[Callable[[], None]] = None,
+    ) -> None:
         self._state = state
+        self._on_call_ended = on_call_ended
 
     async def run(self) -> None:
         while True:
@@ -127,6 +133,7 @@ class ATEventDispatcher:
             if event is None:
                 log.info("RFCOMM socket sentinel received — marking disconnected")
                 self._state.set_disconnected()
+                self._notify_call_ended()
                 return
             self._dispatch(event)
 
@@ -147,6 +154,7 @@ class ATEventDispatcher:
             log.info("Call ended by remote (%s)", prefix)
             self._state.set_call_state(CallState.IDLE)
             self._state.set_audio_active(False)
+            self._notify_call_ended()
         elif prefix == "+BCS":
             # Codec negotiation — accept CVSD (1) only; ignore mSBC for now
             log.debug("+BCS codec negotiation: %s (ignored, using CVSD)", payload)
@@ -189,6 +197,7 @@ class ATEventDispatcher:
             else:
                 self._state.set_call_state(CallState.IDLE)
                 self._state.set_audio_active(False)
+                self._notify_call_ended()
                 log.info("Call ended")
         elif name == "callsetup":
             current = self._state.call_state
@@ -205,3 +214,11 @@ class ATEventDispatcher:
             ):
                 # callsetup cleared without call becoming active → call failed/rejected
                 self._state.set_call_state(CallState.IDLE)
+
+    def _notify_call_ended(self) -> None:
+        if self._on_call_ended is None:
+            return
+        try:
+            self._on_call_ended()
+        except Exception as exc:
+            log.debug("Call-ended cleanup callback failed: %s", exc)

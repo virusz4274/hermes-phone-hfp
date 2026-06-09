@@ -2,15 +2,23 @@
 
 import asyncio
 import json
+import subprocess
 import sys
 import types
 import wave
+from pathlib import Path
 
 import pytest
 
 from hermes_platforms.hfp_phone.adapter import (
     HFPPhoneAdapter,
     PCM_SAMPLE_RATE,
+    check_requirements,
+    validate_config,
+    register,
+    _classify_caller_role,
+    _env_enablement,
+    _apply_yaml_config,
     _normalize_phone_target,
     _rms_s16le,
     _resolve_standalone_target,
@@ -25,6 +33,20 @@ import hermes_platforms.hfp_phone.adapter as adapter_mod
 
 def test_split_csv_trims_and_skips_empty_values():
     assert _split_csv(" a, b ,,c ") == {"a", "b", "c"}
+
+
+def test_hfp_adapter_enforces_own_access_policy():
+    assert HFPPhoneAdapter.enforces_own_access_policy is True
+
+
+def test_classify_caller_role_prefers_admin_then_trusted():
+    assert _classify_caller_role("22:22:D2:F8:01:7A", {"22:22:D2:F8:01:7A"}, set()) == "admin"
+    assert _classify_caller_role("22:22:D2:F8:01:7A", set(), {"22:22:D2:F8:01:7A"}) == "trusted"
+    assert _classify_caller_role("22:22:D2:F8:01:7A", set(), set()) == "unknown"
+
+
+def test_classify_caller_role_normalizes_phone_number_aliases():
+    assert _classify_caller_role("tel:123", {"123"}, set()) == "admin"
 
 
 def test_rms_s16le_detects_silence_and_signal():
@@ -78,8 +100,12 @@ def _adapter_for_audio_tests():
     adapter.session_id = "test-session"
     adapter._audio_task = None
     adapter._ws = None
-    adapter.owner_number = "+15551234567"
+    adapter.owner_number = "123"
     adapter.home_channel = "hfp-phone"
+    adapter.admin_callers = {"123"}
+    adapter.trusted_callers = set()
+    adapter._active_caller_id = "unknown"
+    adapter._active_caller_role = "unknown"
     adapter.call_timeout_seconds = 12.0
     adapter._running = True
     adapter.stream_runs = 0
@@ -90,6 +116,79 @@ def _adapter_for_audio_tests():
 
     adapter._run_audio_stream = _run_audio_stream
     return adapter
+
+
+def test_hermes_config_requires_mcp_url(monkeypatch):
+    monkeypatch.delenv("HFP_PHONE_MCP_URL", raising=False)
+    monkeypatch.delenv("HFP_PHONE_STATUS_URL", raising=False)
+
+    assert check_requirements() is False
+    assert validate_config(None) is False
+
+
+def test_hermes_config_accepts_explicit_mcp_url(monkeypatch):
+    monkeypatch.setenv("HFP_PHONE_MCP_URL", "http://raspberrypi.local:8000/mcp")
+
+    assert check_requirements() is True
+    assert validate_config(None) is True
+
+
+def test_env_enablement_disables_gateway_restart_notifications(monkeypatch):
+    monkeypatch.setenv("HFP_PHONE_MCP_URL", "http://raspberrypi.local:8000/mcp")
+    monkeypatch.setenv("HFP_PHONE_OWNER_NUMBER", "+155****4567")
+
+    assert _env_enablement()["gateway_restart_notification"] is False
+
+
+def test_apply_yaml_config_bridges_role_and_restart_settings():
+    result = _apply_yaml_config(
+        {"hfp_phone": {"admin_callers": "22:22:D2:F8:01:7A"}},
+        {
+            "trusted_callers": "AA:BB:CC:DD:EE:FF",
+            "gateway_restart_notification": False,
+            "unauthorized_dm_behavior": "ignore",
+        },
+    )
+
+    assert result == {
+        "admin_callers": "22:22:D2:F8:01:7A",
+        "trusted_callers": "AA:BB:CC:DD:EE:FF",
+        "gateway_restart_notification": False,
+        "unauthorized_dm_behavior": "ignore",
+    }
+
+
+def test_hfp_mcp_package_does_not_import_hermes_modules():
+    repo_root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                f"import sys; sys.path.insert(0, {str(repo_root / 'src')!r}); "
+                "import hfp_mcp; "
+                "print(any(name.startswith('hermes') for name in sys.modules))"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.stdout.strip() == "False"
+
+
+async def test_connect_fails_when_underlying_mcp_is_unavailable():
+    adapter = HFPPhoneAdapter.__new__(HFPPhoneAdapter)
+    adapter._client = _FakeClient()
+
+    async def _call_tool(_name, _arguments=None):
+        return {"ok": False, "error": "connection refused"}
+
+    adapter._client.call_tool = _call_tool
+
+    assert await adapter.connect() is False
+    assert not getattr(adapter, "_running", False)
 
 
 class _OpenWs:
@@ -120,7 +219,7 @@ async def test_ensure_outbound_call_dials_home_target(monkeypatch):
     assert calls == [
         (
             "dial_and_wait",
-            {"number": "+15551234567", "timeout_seconds": 12.0},
+            {"number": "123", "timeout_seconds": 12.0},
         )
     ]
 
@@ -180,6 +279,39 @@ async def test_send_pcm_fails_when_audio_stream_is_not_connected():
 
     with pytest.raises(RuntimeError, match="not connected"):
         await adapter._send_pcm(b"\x00\x00")
+
+
+def test_hfp_event_includes_caller_role_metadata(monkeypatch):
+    class _FakePlatform:
+        def __init__(self, value):
+            self.value = value
+
+    class _FakeSessionSource:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _FakeMessageType:
+        TEXT = "text"
+
+    class _FakeMessageEvent:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(adapter_mod, "Platform", _FakePlatform)
+    monkeypatch.setattr(adapter_mod, "SessionSource", _FakeSessionSource)
+    monkeypatch.setattr(adapter_mod, "MessageType", _FakeMessageType)
+    monkeypatch.setattr(adapter_mod, "MessageEvent", _FakeMessageEvent)
+
+    adapter = _adapter_for_audio_tests()
+    adapter._active_chat_id = "hfp-phone:22:22:D2:F8:01:7A"
+    adapter._active_caller_id = "22:22:D2:F8:01:7A"
+    adapter._active_caller_role = "trusted"
+
+    event = adapter._event("hello")
+
+    assert event.raw_message["source"] == "hfp-phone"
+    assert event.raw_message["hfp_caller_id"] == "22:22:D2:F8:01:7A"
+    assert event.raw_message["hfp_role"] == "trusted"
 
 
 async def test_standalone_send_dials_streams_and_hangs_up(monkeypatch):
@@ -310,3 +442,37 @@ def test_transcribe_pcm_uses_current_hermes_stt_callable(monkeypatch):
 
     assert _transcribe_pcm(b"\x00\x00" * 80) == "hello from phone"
     assert len(calls) == 1
+
+
+async def test_hfp_phone_call_tool_accepts_dispatcher_kwargs(monkeypatch):
+    calls = []
+
+    async def _send(_pconfig, chat_id, message, **kwargs):
+        calls.append((chat_id, message, kwargs))
+        return {"success": True, "message_id": "msg-1"}
+
+    monkeypatch.setattr(adapter_mod, "_standalone_send", _send)
+
+    result = await adapter_mod._hfp_phone_call_tool(
+        {"number": "+123", "message": "hello"}, task_id="task-1"
+    )
+
+    assert result == {"ok": True, "message_id": "msg-1"}
+    assert calls[0][0] == "+123"
+    assert calls[0][1] == "hello"
+
+
+def test_hfp_phone_call_tool_is_registered_as_async():
+    calls = []
+
+    class _Ctx:
+        def register_platform(self, **kwargs):
+            calls.append(("platform", kwargs))
+
+        def register_tool(self, **kwargs):
+            calls.append(("tool", kwargs))
+
+    register(_Ctx())
+
+    tool = next(kwargs for kind, kwargs in calls if kind == "tool" and kwargs["name"] == "hfp_phone_call")
+    assert tool["is_async"] is True

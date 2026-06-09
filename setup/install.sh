@@ -46,15 +46,11 @@ chmod 644 /etc/dbus-1/system.d/hfp-mcp.conf
 
 echo "==> Configuring BlueZ"
 BLUEZ_CONF=/etc/bluetooth/main.conf
-# Enable auto-power and experimental features (needed for profile registration)
-if grep -q '^\[Policy\]' "$BLUEZ_CONF" 2>/dev/null; then
-    sed -i 's/^#AutoEnable.*/AutoEnable=true/' "$BLUEZ_CONF" || true
-else
-    printf '\n[Policy]\nAutoEnable=true\n' >> "$BLUEZ_CONF"
-fi
-if ! grep -q '^Experimental' "$BLUEZ_CONF" 2>/dev/null; then
-    printf '\n[General]\nExperimental=true\n' >> "$BLUEZ_CONF"
-fi
+# Enable adapter auto-power. The server also powers the adapter at startup, so
+# this is not a hard requirement; it just helps boot/hotplug reliability. The
+# helper also removes the legacy duplicate "[General] Experimental=true" section
+# written by older installers, while preserving intentional user settings.
+python3 "$SCRIPT_DIR/update_bluez_main_conf.py" "$BLUEZ_CONF"
 
 # NOTE: We deliberately do NOT configure WirePlumber's bluez5 headset-roles for
 # hfp_hf. This server registers its own HFP Hands-Free profile and owns the
@@ -70,6 +66,7 @@ echo "==> Installing Python package"
 # Install into a virtual environment in the repo
 python3 -m venv --system-site-packages "$REPO_DIR/.venv"
 "$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR"
+chown -R "$SERVICE_USER:$SERVICE_GROUP" "$REPO_DIR/.venv"
 
 echo "==> Installing systemd user service"
 USER_SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
@@ -84,6 +81,10 @@ if [ ! -f "$USER_ENV_FILE" ]; then
     "$REPO_DIR/.venv/bin/python" "$SCRIPT_DIR/render_hfp_env.py" > "$USER_ENV_FILE"
     chown "$SERVICE_USER:$SERVICE_GROUP" "$USER_ENV_FILE"
     chmod 644 "$USER_ENV_FILE"
+else
+    "$REPO_DIR/.venv/bin/python" "$SCRIPT_DIR/render_hfp_env.py" --migrate-env "$USER_ENV_FILE"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$USER_ENV_FILE"
+    chmod 644 "$USER_ENV_FILE"
 fi
 
 loginctl enable-linger "$SERVICE_USER"
@@ -93,7 +94,8 @@ for _ in 1 2 3 4 5; do
     sleep 1
 done
 runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" systemctl --user daemon-reload
-runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" systemctl --user enable --now hfp-mcp.service
+runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" systemctl --user enable hfp-mcp.service
+runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" systemctl --user restart hfp-mcp.service
 
 echo "==> Installing Hermes call-awareness plugin"
 HERMES_PLUGIN_DIR="$USER_HOME/.hermes/plugins/hfp-call-awareness"
@@ -113,9 +115,11 @@ install -m 644 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$REPO_DIR/hermes_platform
 echo "    → Installed to $HERMES_PHONE_PLUGIN_DIR"
 echo "    → Enable with: hermes plugins enable hfp-phone"
 echo "    → These Hermes plugins were installed only for user '$SERVICE_USER' on this machine."
-echo "      If Hermes runs on another host, copy/enable hfp-phone there and set:"
+echo "      Set Hermes HFP to use this MCP endpoint:"
 echo "      HFP_PHONE_MCP_URL=http://<pi-host>:8000/mcp"
+echo "      Optional status hook URL:"
 echo "      HFP_PHONE_STATUS_URL=http://<pi-host>:8001/status"
+echo "      If Hermes runs on another host, copy/enable hfp-phone there and use the Pi hostname/IP."
 
 echo "==> Making Pi discoverable (pair your phone now if not already done)"
 bluetoothctl power on   || true
@@ -137,5 +141,5 @@ echo "║     http://<pi-host>:8000/mcp                            ║"
 echo "║                                                          ║"
 echo "║  4. Hermes gateway integration:                          ║"
 echo "║     hermes plugins enable hfp-phone                      ║"
-echo "║     set HFP_PHONE_MCP_URL / HFP_PHONE_STATUS_URL         ║"
+echo "║     set HFP_PHONE_MCP_URL to the endpoint above          ║"
 echo "╚══════════════════════════════════════════════════════════╝"

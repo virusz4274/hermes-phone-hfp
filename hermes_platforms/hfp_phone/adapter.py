@@ -55,6 +55,9 @@ DEFAULT_MCP_URL = "http://127.0.0.1:8000/mcp"
 DEFAULT_CALL_TIMEOUT_SECONDS = 45.0
 DEFAULT_IDLE_HANGUP_SECONDS = 20.0
 HOME_CHAT_ALIASES = {"", "home", "hfp-phone", "hfp_phone", "owner"}
+ROLE_ADMIN = "admin"
+ROLE_TRUSTED = "trusted"
+ROLE_UNKNOWN = "unknown"
 
 
 def _truthy(value: Any) -> bool:
@@ -63,6 +66,29 @@ def _truthy(value: Any) -> bool:
 
 def _split_csv(value: str) -> set[str]:
     return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def _caller_aliases(value: str) -> set[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    aliases = {raw}
+    if _looks_like_phone_number(raw):
+        aliases.add(_normalize_phone_target(raw))
+    return aliases
+
+
+def _classify_caller_role(
+    caller: str,
+    admin_callers: set[str],
+    trusted_callers: set[str],
+) -> str:
+    aliases = _caller_aliases(caller)
+    if aliases & admin_callers:
+        return ROLE_ADMIN
+    if aliases & trusted_callers:
+        return ROLE_TRUSTED
+    return ROLE_UNKNOWN
 
 
 def _looks_like_phone_number(value: str) -> bool:
@@ -152,6 +178,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
     """Hermes platform adapter for one active HFP call at a time."""
 
     name = "hfp_phone"
+    enforces_own_access_policy = True
 
     def __init__(self, config: PlatformConfig):
         if Platform is None:
@@ -200,6 +227,16 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         self.allowed_callers = _split_csv(
             os.getenv("HFP_PHONE_ALLOWED_CALLERS") or str(extra.get("allowed_callers") or "")
         )
+        self.admin_callers = _split_csv(
+            os.getenv("HFP_PHONE_ADMIN_CALLERS")
+            or str(extra.get("admin_callers") or "")
+        )
+        if self.owner_number:
+            self.admin_callers.update(_caller_aliases(self.owner_number))
+        self.trusted_callers = _split_csv(
+            os.getenv("HFP_PHONE_TRUSTED_CALLERS")
+            or str(extra.get("trusted_callers") or "")
+        )
         self.vad_threshold = float(extra.get("vad_threshold", os.getenv("HFP_PHONE_VAD_THRESHOLD", "150")))
         self.silence_seconds = float(extra.get("silence_seconds", os.getenv("HFP_PHONE_SILENCE_SECONDS", "0.8")))
         self.min_speech_seconds = float(extra.get("min_speech_seconds", os.getenv("HFP_PHONE_MIN_SPEECH_SECONDS", "0.3")))
@@ -209,10 +246,16 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         self._audio_task: Optional[asyncio.Task] = None
         self._ws = None
         self._active_chat_id = "hfp-phone"
+        self._active_caller_id = "unknown"
+        self._active_caller_role = ROLE_UNKNOWN
         self._last_state = "disconnected"
         self._idle_hangup_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> bool:
+        status = await self._client.call_tool("get_call_status")
+        if status.get("ok") is False:
+            log.error("HFP phone MCP server is unavailable: %s", status.get("error"))
+            return False
         self._running = True
         self._watch_task = asyncio.create_task(self._watch_status(), name="hfp-phone-watch")
         self._mark_connected()
@@ -260,6 +303,12 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         connection = str(status.get("connection") or "")
         address = str(status.get("connected_address") or "unknown")
         self._active_chat_id = f"hfp-phone:{address}"
+        self._active_caller_id = address
+        self._active_caller_role = _classify_caller_role(
+            address,
+            self.admin_callers,
+            self.trusted_callers,
+        )
 
         if call_state == "incoming" and self._last_state != "incoming":
             if self._can_answer(address):
@@ -473,7 +522,11 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             message_type=MessageType.TEXT,
             source=source,
             message_id=str(uuid.uuid4()),
-            raw_message={"source": "hfp-phone"},
+            raw_message={
+                "source": "hfp-phone",
+                "hfp_caller_id": getattr(self, "_active_caller_id", "unknown"),
+                "hfp_role": getattr(self, "_active_caller_role", ROLE_UNKNOWN),
+            },
         )
 
 
@@ -545,17 +598,13 @@ def _convert_audio_to_pcm(audio_path: Path) -> bytes:
 
 
 def check_requirements() -> bool:
-    return bool(os.getenv("HFP_PHONE_MCP_URL") or os.getenv("HFP_PHONE_STATUS_URL"))
+    """Hermes HFP mode requires an MCP endpoint for call control/audio setup."""
+    return bool(os.getenv("HFP_PHONE_MCP_URL"))
 
 
 def validate_config(config) -> bool:
     extra = getattr(config, "extra", {}) or {}
-    return bool(
-        os.getenv("HFP_PHONE_MCP_URL")
-        or os.getenv("HFP_PHONE_STATUS_URL")
-        or extra.get("mcp_url")
-        or extra.get("status_url")
-    )
+    return bool(os.getenv("HFP_PHONE_MCP_URL") or extra.get("mcp_url"))
 
 
 def _env_enablement() -> dict | None:
@@ -563,17 +612,46 @@ def _env_enablement() -> dict | None:
     status_url = os.getenv("HFP_PHONE_STATUS_URL", "").strip()
     owner_number = os.getenv("HFP_PHONE_OWNER_NUMBER", "").strip()
     home_channel = os.getenv("HFP_PHONE_HOME_CHANNEL", "").strip()
-    if not (mcp_url or status_url):
+    if not mcp_url:
         return None
     return {
         "mcp_url": mcp_url or DEFAULT_MCP_URL,
         "status_url": status_url or DEFAULT_STATUS_URL,
         "owner_number": owner_number,
+        "gateway_restart_notification": False,
         "home_channel": {
             "chat_id": home_channel or owner_number or "hfp-phone",
             "name": "HFP Phone",
         },
     }
+
+
+def _apply_yaml_config(yaml_cfg: dict, platform_cfg: dict) -> dict | None:
+    source = {}
+    top_level = yaml_cfg.get("hfp_phone")
+    if isinstance(top_level, dict):
+        source.update(top_level)
+    if isinstance(platform_cfg, dict):
+        source.update(platform_cfg)
+
+    bridgeable = {
+        "mcp_url",
+        "status_url",
+        "default_address",
+        "owner_number",
+        "home_channel",
+        "auto_answer",
+        "call_timeout_seconds",
+        "auto_hangup_idle_seconds",
+        "allowed_callers",
+        "admin_callers",
+        "trusted_callers",
+        "session_id",
+        "gateway_restart_notification",
+        "unauthorized_dm_behavior",
+    }
+    bridged = {key: source[key] for key in bridgeable if key in source}
+    return bridged or None
 
 
 def _config_value(pconfig, name: str, default: str = "") -> str:
@@ -705,6 +783,7 @@ def register(ctx) -> None:
         check_fn=check_requirements,
         validate_config=validate_config,
         env_enablement_fn=_env_enablement,
+        apply_yaml_config_fn=_apply_yaml_config,
         required_env=["HFP_PHONE_MCP_URL"],
         cron_deliver_env_var="HFP_PHONE_HOME_CHANNEL",
         standalone_sender_fn=_standalone_send,
@@ -735,4 +814,5 @@ def register(ctx) -> None:
             "required": ["message"],
         },
         handler=_hfp_phone_call_tool,
+        is_async=True,
     )

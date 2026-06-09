@@ -88,6 +88,32 @@ def _write_state_file() -> None:
         log.debug("State file write failed: %s", exc)
 
 
+def _refresh_sco_connected() -> None:
+    _state.set_sco_connected(_audio_manager.has_sessions())
+
+
+async def _cleanup_all_audio_sessions() -> int:
+    loop = asyncio.get_running_loop()
+    stopped = await loop.run_in_executor(None, _audio_manager.stop_all)
+    _refresh_sco_connected()
+    return stopped
+
+
+def _schedule_call_end_audio_cleanup() -> None:
+    loop = _state._asyncio_loop
+    if loop is None or loop.is_closed():
+        stopped = _audio_manager.stop_all()
+        _state.set_sco_connected(False)
+        if stopped:
+            log.info("Stopped %d SCO audio session(s) after call ended", stopped)
+        return
+
+    def _create_cleanup_task() -> None:
+        asyncio.create_task(_cleanup_all_audio_sessions(), name="audio-cleanup")
+
+    loop.call_soon_threadsafe(_create_cleanup_task)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -145,6 +171,7 @@ async def _start_bluetooth_stack() -> None:
         def _on_request_disconnection(address: str) -> None:
             log.info("Phone requested disconnection: %s", address)
             _state.set_disconnected()
+            _schedule_call_end_audio_cleanup()
 
         def _on_release() -> None:
             log.warning("HFP profile released by bluetoothd")
@@ -170,6 +197,7 @@ def _stop_bluetooth_stack() -> None:
     if _audio_stream_server is not None:
         _audio_stream_server.stop()
     _audio_manager.stop_all()
+    _state.set_sco_connected(False)
     if _glib_loop is not None:
         _glib_loop.quit()
         _glib_loop = None
@@ -209,7 +237,7 @@ async def _run_handshake_and_session(address: str) -> None:
         _state.set_disconnected()
         return
 
-    dispatcher = ATEventDispatcher(_state)
+    dispatcher = ATEventDispatcher(_state, _schedule_call_end_audio_cleanup)
     _dispatcher_task = asyncio.create_task(dispatcher.run(), name="at-dispatcher")
 
 
@@ -318,6 +346,7 @@ async def disconnect_phone() -> dict:
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _manager.disconnect_device, address)
+        await _cleanup_all_audio_sessions()
         _state.set_disconnected()
         return {"ok": True}
     except Exception as exc:
@@ -436,6 +465,7 @@ async def get_phone_context() -> dict:
     - answer_call: incoming call is ringing; use answer_call.
     - start_audio_stream: call is active; use ensure_audio_stream.
     - continue_call: call audio is already active/streaming.
+    - cleanup_audio_sessions: call is idle but a stale SCO bridge remains.
     """
     status = _state.snapshot()
     connection = status["connection"]
@@ -444,10 +474,14 @@ async def get_phone_context() -> dict:
     call_active = call_state == CallState.ACTIVE.value
     incoming = call_state == CallState.INCOMING.value
 
+    stale_audio_session = call_state == CallState.IDLE.value and status["sco_connected"]
+
     if connection == ConnectionState.DISCONNECTED.value:
         next_action = "connect_phone"
     elif connection == ConnectionState.HANDSHAKING.value:
         next_action = "wait"
+    elif stale_audio_session:
+        next_action = "cleanup_audio_sessions"
     elif incoming:
         next_action = "answer_call"
     elif call_active and status["audio_active"] and not status["sco_connected"]:
@@ -461,7 +495,7 @@ async def get_phone_context() -> dict:
 
     return {
         **status,
-        "ready_to_call": connected and call_state == CallState.IDLE.value,
+        "ready_to_call": connected and call_state == CallState.IDLE.value and not stale_audio_session,
         "connected": connected,
         "incoming_call": incoming,
         "call_active": call_active,
@@ -600,8 +634,20 @@ async def stop_audio_capture(session_id: str) -> dict:
         return {"ok": False, "error": f"No session '{session_id}'"}
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _audio_manager.remove_session, session_id)
-    _state.set_sco_connected(False)
+    _refresh_sco_connected()
     return {"ok": True}
+
+
+@mcp.tool()
+async def cleanup_audio_sessions() -> dict:
+    """
+    Stop all SCO audio sessions and refresh bridge state.
+
+    This is normally automatic when the phone reports call end. Use it as a
+    recovery action if get_phone_context reports cleanup_audio_sessions.
+    """
+    stopped = await _cleanup_all_audio_sessions()
+    return {"ok": True, "sessions_stopped": stopped}
 
 
 async def _open_audio_session(session_id: str) -> dict:

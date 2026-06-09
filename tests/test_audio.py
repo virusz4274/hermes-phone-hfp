@@ -123,8 +123,13 @@ def test_manager_create_get_remove():
     m = AudioManager()
     s = m.create_session("call1", "AA:BB:CC:DD:EE:FF")
     assert m.get_session("call1") is s
-    m.remove_session("call1")  # stop() is a no-op since nothing started
+    assert m.session_count() == 1
+    assert m.has_sessions() is True
+    assert m.remove_session("call1") is True  # stop() is a no-op since nothing started
     assert m.get_session("call1") is None
+    assert m.session_count() == 0
+    assert m.has_sessions() is False
+    assert m.remove_session("call1") is False
 
 
 def test_manager_rejects_duplicate_session():
@@ -135,6 +140,16 @@ def test_manager_rejects_duplicate_session():
         assert False, "expected ValueError on duplicate session"
     except ValueError:
         pass
+
+
+def test_manager_stop_all_returns_stopped_count():
+    m = AudioManager()
+    m.create_session("call1", "AA:BB:CC:DD:EE:FF")
+    m.create_session("call2", "AA:BB:CC:DD:EE:FF")
+
+    assert m.stop_all() == 2
+    assert m.session_count() == 0
+    assert m.stop_all() == 0
 
 
 def test_audio_stream_server_issues_session_tokens_and_metadata():

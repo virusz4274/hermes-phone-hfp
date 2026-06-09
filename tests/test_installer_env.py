@@ -35,3 +35,27 @@ def test_render_env_exposes_remote_lan_audio_and_mcp_defaults():
     assert "--audio-host 0.0.0.0" in content
     assert "--audio-public-host 192.168.1.42" in content
     assert "--allowed-host 192.168.1.42:8000" in content
+
+
+def test_migrate_env_content_adds_missing_newer_defaults():
+    content = 'HFP_MCP_OPTS="--port 9000"\n'
+
+    migrated, changed = render_hfp_env.migrate_env_content(content, "192.168.1.42")
+
+    assert changed is True
+    assert "--port 9000" in migrated
+    assert "--status-port 8001" in migrated
+    assert "--audio-host 0.0.0.0" in migrated
+    assert "--audio-public-host 192.168.1.42" in migrated
+
+
+def test_migrate_env_content_preserves_existing_flag_values():
+    content = (
+        'HFP_MCP_OPTS="--port 9000 --status-port 9001 '
+        '--audio-host 127.0.0.1 --audio-public-host phone-pi.local"\n'
+    )
+
+    migrated, changed = render_hfp_env.migrate_env_content(content, "192.168.1.42")
+
+    assert changed is False
+    assert migrated == content

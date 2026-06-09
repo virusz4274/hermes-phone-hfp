@@ -2,6 +2,9 @@
 
 A Python MCP server that turns a Raspberry Pi (or any Linux machine with Bluetooth) into a **Bluetooth Hands-Free Unit** — exactly like a car kit.  An Android phone connects over Bluetooth HFP and the server exposes MCP tools for making calls and routing the call audio so an AI agent can do STT/TTS.
 
+Future Gemini Flash Live integration notes live in
+[FUTURE_GEMINI_LIVE_PLAN.md](FUTURE_GEMINI_LIVE_PLAN.md).
+
 ## How it works
 
 ```
@@ -161,9 +164,10 @@ plugins:
   - hfp-call-awareness
 ```
 
-Hermes plugin — tell it where to fetch call status from the Pi:
+Hermes plugin — tell it where to fetch call status from the Pi. The newer
+`HFP_PHONE_STATUS_URL` and older `HFP_MCP_STATUS_URL` names are both accepted:
 ```bash
-export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
+export HFP_PHONE_STATUS_URL=http://raspberrypi.local:8001/status
 ```
 
 Or set it permanently in your shell profile / systemd environment.
@@ -313,6 +317,7 @@ protection on, list every name/IP clients use to reach the Pi:
 | `get_audio_chunk(session_id)` | Deprecated/diagnostic: get next captured PCM chunk as base64 |
 | `play_audio(session_id, audio_b64)` | Deprecated/diagnostic: queue raw base64 PCM bytes into the call |
 | `stop_audio_capture(session_id)` | Stop the SCO audio session and free resources |
+| `cleanup_audio_sessions()` | Stop all SCO sessions and clear stale bridge state |
 
 ### MCP control-plane optimisations
 
@@ -386,10 +391,19 @@ STT, Hermes responses are synthesized through Hermes TTS, converted to 8 kHz
 mono PCM with `ffmpeg`, and played back into the cellular call over the audio
 WebSocket.
 
+Hermes does not replace the MCP server. The `hfp-phone` platform has its own
+Hermes integration layer, but it uses the underlying `hfp-mcp-server` MCP tools
+for call control (`dial_and_wait`, `answer_call`, `hangup`,
+`ensure_audio_stream`, etc.). The MCP server can run without Hermes; Hermes
+cannot place or answer HFP calls unless the MCP server is running and reachable.
+Set `HFP_PHONE_MCP_URL` to the MCP endpoint on whichever machine owns Bluetooth
+HFP. If Hermes runs on the same machine as the installed service, use
+`http://127.0.0.1:8000/mcp`; if Hermes runs elsewhere, use the Pi hostname or
+LAN IP.
+
 The installer installs Hermes plugins only for `SERVICE_USER` on the machine
 where it runs. If Hermes runs on a different host, copy or install the `hfp-phone`
-plugin on that Hermes host and set the `HFP_PHONE_*` URLs below to point at the
-Pi.
+plugin on that Hermes host and set `HFP_PHONE_MCP_URL` to point at the Pi.
 
 Minimal `.env` values for the machine running `hermes gateway`:
 
@@ -399,6 +413,33 @@ HFP_PHONE_STATUS_URL=http://raspberrypi.local:8001/status
 HFP_PHONE_AUTO_ANSWER=true
 HFP_PHONE_OWNER_NUMBER=+15551234567
 HFP_PHONE_HOME_CHANNEL=+15551234567
+```
+
+Use `.env` for connection/bootstrap values and secrets. Prefer `~/.hermes/config.yaml`
+for policy values such as caller roles and restart-notification behavior because
+`hermes config set ...` can manage them safely:
+
+```bash
+# Avoid gateway restart/shutdown notifications placing HFP phone calls.
+hermes config set hfp_phone.gateway_restart_notification false
+
+# Avoid the generic Hermes DM authorization pairing-code flow over phone calls.
+hermes config set hfp_phone.unauthorized_dm_behavior ignore
+
+# Current partial role config. These identifiers are matched against the caller
+# identifier exposed by HFP status. Today that is usually the Bluetooth device
+# address until +CLIP/+CLCC caller-number support is implemented.
+hermes config set hfp_phone.admin_callers 22:22:D2:F8:01:7A
+hermes config set hfp_phone.trusted_callers +15557654321,+15559876543
+```
+
+Equivalent environment variables are also supported when you deliberately want
+systemd/shell-managed config instead of Hermes config:
+
+```bash
+HFP_PHONE_ALLOWED_CALLERS=22:22:D2:F8:01:7A
+HFP_PHONE_ADMIN_CALLERS=+15551234567
+HFP_PHONE_TRUSTED_CALLERS=+15557654321,+15559876543
 ```
 
 Then enable the platform plugin:
@@ -421,25 +462,37 @@ TTS, listens for follow-up while the call remains active, and hangs up after
 calling, the reminder target must be a different number than the SIM in the
 paired gateway phone; a phone cannot dial itself through its own cellular line.
 
-### Future caller permissions
+### Caller permissions status
 
-The current HFP phone platform can auto-answer and place calls through the
-paired Android phone. Future work should add caller identity and permission
-levels so different callers can use Hermes safely:
+The HFP phone platform now has a first-pass role model for calls, but true
+cellular caller-number identity is still pending. Role config can classify the
+caller as `admin`, `trusted`, or `unknown`; however, until `+CLIP`/`+CLCC` caller
+ID parsing is added, the only reliable inbound identifier exposed by `/status` is
+the connected Bluetooth device address. That address identifies the gateway phone,
+not necessarily the person calling the SIM.
+
+For real caller permissions, match roles against cellular phone numbers once
+caller ID support is implemented. The Bluetooth device address should be treated
+as transport trust only, not as proof that the remote caller is the owner.
+
+Target permission model:
 
 | Level | Who | Allowed actions |
 |-------|-----|-----------------|
-| Owner/admin | Your configured owner number | Full assistant access, privileged tools, outbound calls, schedules, reminders, and approvals |
+| Owner/admin | Configured owner/admin phone numbers | Full assistant access, privileged tools, outbound calls, schedules, reminders, and approvals |
 | Trusted contacts | Whitelisted numbers | Leave messages, request meetings, create pending reminders/tasks for owner approval |
 | Unknown callers | Any non-blocked caller | Basic conversation, voicemail-style messages, callback requests |
 | Blocked callers | Denylist | Reject, ignore, or hang up |
 
-Planned implementation notes:
+Implementation notes:
 
-- Add HFP caller ID support, likely via `+CLIP`, so inbound calls can be mapped
-  to phone numbers instead of only the connected Bluetooth device address.
-- Add config such as `HFP_PHONE_OWNER_NUMBER`, `HFP_PHONE_TRUSTED_NUMBERS`,
-  `HFP_PHONE_BLOCKED_NUMBERS`, and optional contact labels.
+- Current config keys: `hfp_phone.admin_callers`, `hfp_phone.trusted_callers`,
+  `HFP_PHONE_ADMIN_CALLERS`, and `HFP_PHONE_TRUSTED_CALLERS`.
+- Current restart/authorization safety keys: `hfp_phone.gateway_restart_notification: false`
+  and `hfp_phone.unauthorized_dm_behavior: ignore`.
+- Add HFP caller ID support, likely via `AT+CLIP=1` / `+CLIP` and fallback
+  `AT+CLCC` parsing, so inbound calls can be mapped to phone numbers instead of
+  only the connected Bluetooth device address.
 - Gate privileged requests by caller level. Unknown and trusted callers should
   create pending requests instead of directly executing sensitive tools.
 - Add optional admin activation by keyword or PIN, for example "admin mode" plus
@@ -460,7 +513,6 @@ Planned implementation notes:
      WebSocket receive bytes → feed to STT / live model
      WebSocket send TTS bytes → caller hears your AI
 6. hangup()
-7. stop_audio_capture("active-call")
 ```
 
 Incoming calls use the same realtime audio path:
@@ -476,7 +528,11 @@ Incoming calls use the same realtime audio path:
 ```
 
 `audio_active=true` means the phone reports active call audio. `sco_connected=true`
-means this server has opened the direct SCO audio bridge.
+means this server has opened the direct SCO audio bridge. MCP automatically
+stops SCO sessions when the phone reports that the call ended. If
+`get_phone_context()` ever reports `recommended_next_action=cleanup_audio_sessions`,
+call `cleanup_audio_sessions()` to clear stale audio state before starting the
+next call.
 
 ## Troubleshooting
 

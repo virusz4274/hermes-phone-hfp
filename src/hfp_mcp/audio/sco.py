@@ -306,15 +306,25 @@ class AudioManager:
         with self._lock:
             return self._sessions.get(session_id)
 
-    def remove_session(self, session_id: str) -> None:
+    def remove_session(self, session_id: str) -> bool:
         with self._lock:
             s = self._sessions.pop(session_id, None)
         if s:
             s.stop()
+            return True
+        return False
 
-    def stop_all(self) -> None:
+    def session_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+    def has_sessions(self) -> bool:
+        return self.session_count() > 0
+
+    def stop_all(self) -> int:
         with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for s in sessions:
             s.stop()
+        return len(sessions)

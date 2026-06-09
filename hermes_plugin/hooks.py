@@ -5,7 +5,8 @@ Same-machine mode (default):
   Reads /tmp/hfp-mcp-state.json written by hfp-mcp-server on every state change.
 
 Remote mode (Pi MCP server, Hermes on another machine):
-  Set HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
+  Set HFP_PHONE_STATUS_URL=http://raspberrypi.local:8001/status
+  or the legacy HFP_MCP_STATUS_URL equivalent.
   The hook fetches JSON from the Pi's status endpoint (1 s timeout, non-blocking
   to the LLM turn).
 """
@@ -18,17 +19,24 @@ import urllib.request
 from pathlib import Path
 
 _STATE_FILE = Path("/tmp/hfp-mcp-state.json")
-_STATUS_URL = os.environ.get("HFP_MCP_STATUS_URL", "").strip()
-
 # States where the user (or AI) is actively engaged in a call
 _ACTIVE_CALL_STATES = {"incoming", "dialing", "ringing", "active", "ending"}
 
 
+def _configured_status_url() -> str:
+    """Return the configured remote status URL, if Hermes is not on the Pi."""
+    return (
+        os.environ.get("HFP_PHONE_STATUS_URL", "").strip()
+        or os.environ.get("HFP_MCP_STATUS_URL", "").strip()
+    )
+
+
 def _fetch_state() -> dict | None:
     """Return the HFP state dict, or None if unreachable / not running."""
-    if _STATUS_URL:
+    status_url = _configured_status_url()
+    if status_url:
         try:
-            with urllib.request.urlopen(_STATUS_URL, timeout=1.0) as resp:
+            with urllib.request.urlopen(status_url, timeout=1.0) as resp:
                 return json.loads(resp.read())
         except Exception:
             return None
