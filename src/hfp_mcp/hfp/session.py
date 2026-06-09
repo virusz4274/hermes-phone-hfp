@@ -192,10 +192,16 @@ class ATEventDispatcher:
                 log.info("Call ended")
         elif name == "callsetup":
             current = self._state.call_state
-            if val == 2 and current == CallState.IDLE:
+            if val == 1:
+                self._state.set_call_state(CallState.INCOMING)
+            elif val == 2 and current == CallState.IDLE:
                 self._state.set_call_state(CallState.DIALING)
             elif val == 3:
                 self._state.set_call_state(CallState.RINGING)
-            elif val == 0 and current in (CallState.DIALING, CallState.RINGING):
+            elif val == 0 and current in (
+                CallState.INCOMING,
+                CallState.DIALING,
+                CallState.RINGING,
+            ):
                 # callsetup cleared without call becoming active → call failed/rejected
                 self._state.set_call_state(CallState.IDLE)

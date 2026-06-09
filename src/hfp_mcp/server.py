@@ -30,6 +30,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import threading
 from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -48,7 +49,7 @@ from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile
 from .config import AUDIO_STREAM_HOST, AUDIO_STREAM_PORT
 from .hfp.handshake import HFPHandshaker, HandshakeError
-from .hfp.protocol import CMD_ATD, CMD_CHUP
+from .hfp.protocol import CMD_ATA, CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
 from .state import CallState, ConnectionState, HFPState
 from .transport import apply_network_settings
@@ -80,7 +81,9 @@ _http_mode = False
 def _write_state_file() -> None:
     """Write a JSON snapshot of HFP state to STATE_FILE for the Hermes plugin."""
     try:
-        STATE_FILE.write_text(json.dumps(_state.snapshot()))
+        tmp = STATE_FILE.with_suffix(f"{STATE_FILE.suffix}.tmp")
+        tmp.write_text(json.dumps(_state.snapshot()))
+        os.replace(tmp, STATE_FILE)
     except Exception as exc:
         log.debug("State file write failed: %s", exc)
 
@@ -225,7 +228,11 @@ mcp = FastMCP("HFP Phone Controller", lifespan=lifespan)
 async def scan_paired_devices() -> list[dict]:
     """
     List Bluetooth devices paired with this machine that support HFP
-    (i.e. phones).  Returns address, name, and whether currently connected.
+    (i.e. phones). Returns address, name, and whether currently connected.
+
+    Recommended workflow:
+    1. Use this once to find the phone address.
+    2. Use connect_and_wait(address) to connect and wait for HFP readiness.
     """
     if _manager is None:
         return []
@@ -238,7 +245,9 @@ async def connect_phone(address: str) -> dict:
     """
     Connect to a paired Android phone by Bluetooth address (AA:BB:CC:DD:EE:FF).
     Triggers the HFP profile connection; the handshake runs automatically.
-    Returns immediately — use get_call_status to confirm the connection.
+
+    Low-level tool: returns immediately. Agents should usually prefer
+    connect_and_wait(address), which avoids repeated get_call_status polling.
     """
     if _manager is None:
         return {"ok": False, "error": "Server not initialised"}
@@ -255,9 +264,52 @@ async def connect_phone(address: str) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+async def _wait_for_status(predicate, timeout_seconds: float, interval: float = 0.25) -> dict:
+    deadline = asyncio.get_event_loop().time() + max(0.0, timeout_seconds)
+    last = _state.snapshot()
+    while True:
+        if predicate(last):
+            return {"ok": True, "status": last}
+        if asyncio.get_event_loop().time() >= deadline:
+            return {
+                "ok": False,
+                "error": f"Timed out after {timeout_seconds:g}s",
+                "status": last,
+            }
+        await asyncio.sleep(interval)
+        last = _state.snapshot()
+
+
+@mcp.tool()
+async def connect_and_wait(address: str, timeout_seconds: float = 15.0) -> dict:
+    """
+    Connect to a paired phone and wait until the HFP service-level connection is
+    ready. This collapses connect_phone + repeated get_call_status polling.
+
+    Use this before dial_and_wait(), answer_call(), or ensure_audio_stream().
+    Returns ok=true with status when connection=connected.
+    """
+    if _state.connection_state == ConnectionState.CONNECTED:
+        return {"ok": True, "status": _state.snapshot()}
+
+    result = await connect_phone(address)
+    if not result.get("ok"):
+        return result
+
+    return await _wait_for_status(
+        lambda s: s["connection"] == ConnectionState.CONNECTED.value,
+        timeout_seconds,
+    )
+
+
 @mcp.tool()
 async def disconnect_phone() -> dict:
-    """Disconnect the currently connected phone."""
+    """
+    Disconnect the currently connected phone.
+
+    This also clears call/audio state. Use hangup() first if a call is active
+    and you want the phone call ended cleanly before Bluetooth disconnects.
+    """
     if _manager is None:
         return {"ok": False, "error": "Server not initialised"}
     if _state.connection_state == ConnectionState.DISCONNECTED:
@@ -276,8 +328,11 @@ async def disconnect_phone() -> dict:
 async def dial(number: str) -> dict:
     """
     Make an outgoing call to a phone number (e.g. "+14155551234").
-    The phone must already be connected (use connect_phone first).
-    Returns immediately; poll get_call_status to track DIALING → ACTIVE.
+    The phone must already be connected.
+
+    Low-level tool: returns immediately. Agents should usually prefer
+    dial_and_wait(number), which waits until call_state=active and
+    audio_active=true before returning.
     """
     if _state.connection_state != ConnectionState.CONNECTED:
         return {"ok": False, "error": "Phone not connected (HFP not ready)"}
@@ -290,8 +345,61 @@ async def dial(number: str) -> dict:
 
 
 @mcp.tool()
+async def dial_and_wait(number: str, timeout_seconds: float = 30.0) -> dict:
+    """
+    Dial a number and wait until the call becomes active and call audio is
+    reported ready. This collapses dial + repeated get_call_status polling.
+
+    Recommended outbound-call workflow:
+    1. connect_and_wait(address)
+    2. dial_and_wait(number)
+    3. ensure_audio_stream("active-call")
+    4. Use the returned WebSocket for STT/TTS audio.
+    5. hangup() when done.
+    """
+    result = await dial(number)
+    if not result.get("ok"):
+        return result
+
+    return await _wait_for_status(
+        lambda s: s["call_state"] == CallState.ACTIVE.value
+        and bool(s["audio_active"]),
+        timeout_seconds,
+    )
+
+
+@mcp.tool()
+async def answer_call() -> dict:
+    """
+    Answer an incoming call (sends ATA to the phone).
+
+    Recommended incoming-call workflow:
+    1. get_phone_context() reports incoming_call=true or recommended_next_action=answer_call.
+    2. answer_call()
+    3. Wait for get_phone_context() to show call_active=true/audio_active=true if needed.
+    4. ensure_audio_stream("active-call")
+    5. Use the returned WebSocket for STT/TTS audio.
+    """
+    if _state.connection_state != ConnectionState.CONNECTED:
+        return {"ok": False, "error": "Phone not connected (HFP not ready)"}
+    if _state.call_state not in (CallState.INCOMING, CallState.RINGING):
+        return {
+            "ok": False,
+            "error": f"No incoming call to answer (state: {_state.call_state.value})",
+        }
+    await _state._at_cmd_queue.put(CMD_ATA.encode("ascii"))
+    return {"ok": True}
+
+
+@mcp.tool()
 async def hangup() -> dict:
-    """End the current call (sends AT+CHUP to the phone)."""
+    """
+    End the current call (sends AT+CHUP to the phone).
+
+    Use this after outbound calls, incoming calls, reminders, or live voice
+    sessions. Call stop_audio_capture(session_id) if a legacy/base64 capture
+    session is still open.
+    """
     if _state.call_state == CallState.IDLE:
         return {"ok": False, "error": "No active call"}
     await _state._at_cmd_queue.put(CMD_CHUP.encode("ascii"))
@@ -305,17 +413,67 @@ async def get_call_status() -> dict:
     Return the current Bluetooth connection and call state.
 
     connection: disconnected | handshaking | connected
-    call_state: idle | dialing | ringing | active | ending
+    call_state: idle | incoming | dialing | ringing | active | ending
     audio_active: true when the phone reports active call audio
     sco_connected: true when this server has opened the SCO audio bridge
+
+    For agent decision-making, prefer get_phone_context(), which includes
+    booleans and recommended_next_action.
     """
     return _state.snapshot()
 
 
 @mcp.tool()
+async def get_phone_context() -> dict:
+    """
+    Return an agent-friendly summary of the phone/call state with booleans and a
+    recommended next action. Prefer this when an LLM needs to choose a call step.
+
+    Typical recommended_next_action values:
+    - connect_phone: no phone is connected; use scan_paired_devices then connect_and_wait.
+    - wait: connection/call state is changing.
+    - dial: phone is connected and idle; use dial_and_wait.
+    - answer_call: incoming call is ringing; use answer_call.
+    - start_audio_stream: call is active; use ensure_audio_stream.
+    - continue_call: call audio is already active/streaming.
+    """
+    status = _state.snapshot()
+    connection = status["connection"]
+    call_state = status["call_state"]
+    connected = connection == ConnectionState.CONNECTED.value
+    call_active = call_state == CallState.ACTIVE.value
+    incoming = call_state == CallState.INCOMING.value
+
+    if connection == ConnectionState.DISCONNECTED.value:
+        next_action = "connect_phone"
+    elif connection == ConnectionState.HANDSHAKING.value:
+        next_action = "wait"
+    elif incoming:
+        next_action = "answer_call"
+    elif call_active and status["audio_active"] and not status["sco_connected"]:
+        next_action = "start_audio_stream"
+    elif call_active:
+        next_action = "continue_call"
+    elif call_state in (CallState.DIALING.value, CallState.RINGING.value, CallState.ENDING.value):
+        next_action = "wait"
+    else:
+        next_action = "dial"
+
+    return {
+        **status,
+        "ready_to_call": connected and call_state == CallState.IDLE.value,
+        "connected": connected,
+        "incoming_call": incoming,
+        "call_active": call_active,
+        "recommended_next_action": next_action,
+    }
+
+
+@mcp.tool()
 async def start_audio_capture(session_id: str) -> dict:
     """
-    Open the SCO audio link and enable legacy base64 audio chunk tools.
+    DEPRECATED / DIAGNOSTIC: open the SCO audio link for legacy base64 audio
+    chunk tools.
 
     The call must already be in ACTIVE state (audio_active=true). This connects a
     Bluetooth SCO socket directly (HF-initiated) and streams 8 kHz CVSD PCM — it
@@ -323,6 +481,10 @@ async def start_audio_capture(session_id: str) -> dict:
 
     session_id: arbitrary string to identify this capture session (e.g. "call1").
     Returns ok=true once the SCO bridge is open, or ok=false with an error.
+
+    Legacy/diagnostic tool. Realtime agents should prefer
+    ensure_audio_stream(), which returns a duplex WebSocket and avoids large
+    repeated MCP base64 tool calls.
     """
     if _audio_manager.get_session(session_id):
         return {"ok": False, "error": f"Session '{session_id}' already exists"}
@@ -343,6 +505,10 @@ async def start_audio_stream(session_id: str) -> dict:
     The WebSocket is the realtime audio plane. It sends and receives binary PCM:
     8 kHz, signed 16-bit, mono. Use MCP tools for call control; use this stream
     for STT/TTS or live voice agents. The call must already be ACTIVE.
+
+    Prefer ensure_audio_stream("active-call") unless the client needs a custom
+    session id. Do not use get_audio_chunk/play_audio for realtime voice unless
+    WebSockets are unavailable.
     """
     global _audio_stream_server
 
@@ -373,13 +539,27 @@ async def start_audio_stream(session_id: str) -> dict:
 
 
 @mcp.tool()
+async def ensure_audio_stream(session_id: str = "active-call") -> dict:
+    """
+    Start or reuse the realtime call audio stream using a stable default session
+    id. Prefer this for agents that do not care about naming audio sessions.
+
+    Use after dial_and_wait() for outbound calls or after answer_call() once
+    audio_active=true. The returned stream_url is the realtime duplex audio
+    channel: receive caller PCM for STT and send TTS PCM for playback.
+    """
+    return await start_audio_stream(session_id)
+
+
+@mcp.tool()
 async def get_audio_chunk(session_id: str) -> dict:
     """
-    Return the next legacy base64 audio chunk from the phone microphone.
+    DEPRECATED / DIAGNOSTIC: return the next legacy base64 audio chunk from the
+    phone microphone.
 
     Audio format: 8 kHz, 16-bit signed mono PCM, base64-encoded.
     Returns audio_b64=null if no new audio is available yet (buffer empty).
-    Prefer start_audio_stream for realtime STT/TTS.
+    Legacy/diagnostic tool. Prefer ensure_audio_stream for realtime STT/TTS.
     """
     session = _audio_manager.get_session(session_id)
     if not session:
@@ -391,10 +571,12 @@ async def get_audio_chunk(session_id: str) -> dict:
 @mcp.tool()
 async def play_audio(session_id: str, audio_b64: str) -> dict:
     """
-    Queue legacy base64-encoded PCM audio into the call.
+    DEPRECATED / DIAGNOSTIC: queue legacy base64-encoded PCM audio into the call.
 
-    Audio must be 8 kHz, 16-bit signed mono PCM.
-    Prefer start_audio_stream for realtime TTS/live voice agents.
+    This does NOT accept an audio file path or compressed audio. audio_b64 must
+    be base64-encoded raw PCM bytes: 8 kHz, 16-bit signed, mono.
+    Legacy/diagnostic tool. Prefer ensure_audio_stream for realtime TTS/live
+    voice agents.
 
     audio_b64: base64-encoded raw PCM bytes.
     Returns bytes_queued on success.

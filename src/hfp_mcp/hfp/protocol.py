@@ -22,6 +22,7 @@ CMD_CIND_READ = "AT+CIND?\r"            # Read current indicator values
 CMD_CMER = "AT+CMER=3,0,0,1\r"         # Enable unsolicited indicator events
 CMD_CHLD_LIST = "AT+CHLD=?\r"           # Query call-hold capabilities (required by spec)
 CMD_ATD = "ATD{number};\r"             # Dial — semicolon selects voice call mode
+CMD_ATA = "ATA\r"                      # Answer an incoming voice call
 CMD_CHUP = "AT+CHUP\r"                 # Hang up / reject
 CMD_CLCC = "AT+CLCC\r"                 # List current calls
 CMD_BCC = "AT+BCC\r"                   # Request SCO audio link from phone

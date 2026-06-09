@@ -1,0 +1,50 @@
+name: hfp-phone
+label: HFP Phone
+kind: platform
+version: "1.0.0"
+description: >
+  Hermes gateway platform adapter for live cellular calls routed through the
+  phone-bluetooth-hfp-mcp Bluetooth Hands-Free gateway.
+entry_point: hfp_phone
+requires_env:
+  - name: HFP_PHONE_MCP_URL
+    description: "HFP MCP streamable-http endpoint, e.g. http://raspberrypi.local:8000/mcp"
+    prompt: "HFP MCP URL"
+    password: false
+optional_env:
+  - name: HFP_PHONE_STATUS_URL
+    description: "Plain JSON status endpoint, e.g. http://raspberrypi.local:8001/status"
+    prompt: "HFP status URL"
+    password: false
+  - name: HFP_PHONE_DEFAULT_ADDRESS
+    description: "Default paired phone Bluetooth address for outbound calls"
+    prompt: "Default phone address"
+    password: false
+  - name: HFP_PHONE_OWNER_NUMBER
+    description: "Default phone number Hermes calls for reminders"
+    prompt: "Owner phone number"
+    password: false
+  - name: HFP_PHONE_HOME_CHANNEL
+    description: "Default Hermes cron delivery target for phone reminders"
+    prompt: "Phone reminder home channel"
+    password: false
+  - name: HFP_PHONE_AUTO_ANSWER
+    description: "Answer incoming calls automatically when set to true"
+    prompt: "Auto-answer incoming calls"
+    password: false
+  - name: HFP_PHONE_CALL_TIMEOUT_SECONDS
+    description: "Seconds to wait for an outbound call to become active"
+    prompt: "Outbound call timeout"
+    password: false
+  - name: HFP_PHONE_AUTO_HANGUP_IDLE_SECONDS
+    description: "Seconds to wait after speaking before hanging up; 0 disables auto-hangup"
+    prompt: "Idle hangup seconds"
+    password: false
+  - name: HFP_PHONE_ALLOWED_CALLERS
+    description: "Comma-separated caller identifiers allowed to trigger auto-answer; empty allows all"
+    prompt: "Allowed callers"
+    password: false
+  - name: HFP_PHONE_SESSION_ID
+    description: "Audio session id to use for active calls"
+    prompt: "Audio session id"
+    password: false

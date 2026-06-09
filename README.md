@@ -36,13 +36,21 @@ cd phone-bluetooth-hfp-mcp
 sudo bash setup/install.sh
 ```
 
-The script installs system packages, configures BlueZ, and creates a virtualenv. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …` works on any account, not just `pi`); override explicitly with `SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe — every step is idempotent.
+The script installs system packages, configures BlueZ, creates a virtualenv,
+installs the Hermes plugin for the invoking user, and installs/enables/starts a
+`systemd --user` service named `hfp-mcp` for remote `streamable-http` access at
+boot. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …`
+works on any account, not just `pi`); override explicitly with
+`SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe —
+every step is idempotent.
 
 ### 2. Pair your phone
 
-**Start the MCP server first** (see step 3), then pair. The server registers the
-HFP Hands-Free profile and a pairing agent on startup — the phone only sees the
-Pi as a "Phone audio" device while the server is running.
+**Start the MCP server first**, then pair. The installer starts the `hfp-mcp`
+user service automatically; if you are running from source without the service,
+start `.venv/bin/hfp-mcp-server` before pairing. The server registers the HFP
+Hands-Free profile and a pairing agent on startup — the phone only sees the Pi
+as a "Phone audio" device while the server is running.
 
 With the server running, pair from the **phone's** Bluetooth settings: scan,
 select the Pi (its adapter alias, e.g. `raspberrypi`), and confirm the passkey
@@ -106,12 +114,20 @@ The MCP server must run on the Pi (it owns the Bluetooth hardware), but the AI a
 **On the Pi** — start the server in streamable-http (HTTP) mode:
 
 ```bash
-.venv/bin/hfp-mcp-server --transport streamable-http
+systemctl --user status hfp-mcp
 # MCP endpoint:    http://raspberrypi.local:8000/mcp
 # Status endpoint: http://raspberrypi.local:8001/status
 ```
 
-You can customise the ports:
+If you are not using the installed service, run it manually:
+
+```bash
+.venv/bin/hfp-mcp-server --transport streamable-http
+```
+
+You can customise the service ports in `~/.config/hfp-mcp.env`, or pass them
+directly when running manually:
+
 ```bash
 .venv/bin/hfp-mcp-server --transport streamable-http --port 8000 --status-port 8001
 ```
@@ -210,6 +226,36 @@ hfp-mcp-server --transport streamable-http \
 > portion is whatever the remote machine uses to reach the Pi — `raspberrypi.local`,
 > the alias from `bluetoothctl show` (e.g. `tardis.local`), or the LAN IP.
 
+### Run as a systemd service
+
+`setup/install.sh` installs, enables, and starts a **user** systemd service named
+`hfp-mcp` and enables linger for the install user, so the server starts at boot
+without an interactive login. The service is for `streamable-http` only. `stdio`
+mode is not a daemon: a local MCP client starts it over stdin/stdout, and it
+exits when that pipe closes.
+
+Manage the service as the install user:
+
+```bash
+systemctl --user start hfp-mcp
+systemctl --user stop hfp-mcp
+systemctl --user restart hfp-mcp
+systemctl --user status hfp-mcp
+journalctl --user -u hfp-mcp -f
+```
+
+Edit `~/.config/hfp-mcp.env` to change service ports or add flags:
+
+```bash
+HFP_MCP_OPTS="--port 8000 --status-port 8001"
+```
+
+After editing the env file, restart the service:
+
+```bash
+systemctl --user restart hfp-mcp
+```
+
 ### Host header / remote clients (`421 Misdirected Request`)
 
 The MCP SDK includes **DNS-rebinding protection** that, by default, only accepts
@@ -243,15 +289,39 @@ protection on, list every name/IP clients use to reach the Pi:
 |------|-------------|
 | `scan_paired_devices()` | List paired phones (HFP Audio Gateway devices) |
 | `connect_phone(address)` | Connect to phone by BT address |
+| `connect_and_wait(address, timeout_seconds=15)` | Connect and wait until HFP is ready |
 | `disconnect_phone()` | Disconnect current phone |
 | `dial(number)` | Make an outgoing call, e.g. `"+14155551234"` |
+| `dial_and_wait(number, timeout_seconds=30)` | Dial and wait until call audio is active |
+| `answer_call()` | Answer an incoming call |
 | `hangup()` | End the current call |
 | `get_call_status()` | Returns connection, call state, phone audio readiness, and SCO bridge state |
+| `get_phone_context()` | Agent-friendly call summary with a recommended next action |
 | `start_audio_stream(session_id)` | Start/reuse SCO audio and return a duplex WebSocket for realtime STT/TTS |
-| `start_audio_capture(session_id)` | Start SCO audio for legacy base64 chunk tools (call must be ACTIVE) |
-| `get_audio_chunk(session_id)` | Get next legacy captured PCM chunk as base64 |
-| `play_audio(session_id, audio_b64)` | Queue legacy base64 PCM audio into the call |
+| `ensure_audio_stream(session_id="active-call")` | Start/reuse realtime audio with a stable default session id |
+| `start_audio_capture(session_id)` | Deprecated/diagnostic: start SCO audio for legacy base64 chunk tools |
+| `get_audio_chunk(session_id)` | Deprecated/diagnostic: get next captured PCM chunk as base64 |
+| `play_audio(session_id, audio_b64)` | Deprecated/diagnostic: queue raw base64 PCM bytes into the call |
 | `stop_audio_capture(session_id)` | Stop the SCO audio session and free resources |
+
+### MCP control-plane optimisations
+
+MCP remains the control plane for call setup, teardown, and status. The realtime
+audio path is intentionally outside MCP: use the WebSocket returned by
+`start_audio_stream()` / `ensure_audio_stream()` for STT/TTS audio.
+
+The high-level tools reduce repeated agent polling:
+
+- `connect_and_wait()` wraps `connect_phone()` plus connection-state waiting.
+- `dial_and_wait()` wraps `dial()` plus call/audio readiness waiting.
+- `ensure_audio_stream()` opens or reuses the realtime audio stream with a
+  stable default session id.
+- `get_phone_context()` returns an agent-friendly summary and recommended next
+  action so models do not have to infer the workflow from raw state fields.
+
+The older base64 audio chunk tools are deprecated for normal agent use. They
+remain available for compatibility and diagnostics, but they are not the
+preferred realtime path.
 
 ### Audio format
 
@@ -292,21 +362,102 @@ Connect to `stream_url` and exchange binary messages:
 
 The legacy base64 tools remain useful for compatibility and short diagnostics,
 but they are not the preferred path for realtime agents such as Hermes.
+`play_audio()` does not accept an audio file path or MP3/WAV data directly; it
+expects base64-encoded raw 8 kHz, signed 16-bit, mono PCM bytes. For normal AI
+speech playback, use the WebSocket stream returned by `ensure_audio_stream()`
+or the Hermes phone platform TTS bridge.
+
+### Hermes phone platform plugin
+
+The installer also copies a repo-local Hermes platform plugin to
+`~/.hermes/plugins/hfp-phone`. It turns this gateway into a Hermes messaging
+platform named `hfp_phone`: incoming phone audio is transcribed through Hermes
+STT, Hermes responses are synthesized through Hermes TTS, converted to 8 kHz
+mono PCM with `ffmpeg`, and played back into the cellular call over the audio
+WebSocket.
+
+Minimal `.env` values for the machine running `hermes gateway`:
+
+```bash
+HFP_PHONE_MCP_URL=http://raspberrypi.local:8000/mcp
+HFP_PHONE_STATUS_URL=http://raspberrypi.local:8001/status
+HFP_PHONE_AUTO_ANSWER=true
+HFP_PHONE_OWNER_NUMBER=+15551234567
+HFP_PHONE_HOME_CHANNEL=+15551234567
+```
+
+Then enable the platform plugin:
+
+```bash
+hermes plugins enable hfp-phone
+hermes gateway
+```
+
+This does **not** give Hermes its own phone number. The paired Android phone is
+still the cellular endpoint. Hermes can answer calls routed to that phone, dial
+through that phone, and participate in merged calls only when Android routes the
+merged-call Bluetooth audio to this HFP device.
+
+For phone reminders, schedule Hermes jobs with `deliver=hfp_phone`. The plugin
+uses `HFP_PHONE_HOME_CHANNEL` / `HFP_PHONE_OWNER_NUMBER` as the outbound target:
+it dials through the paired Android phone, speaks the reminder through Hermes
+TTS, listens for follow-up while the call remains active, and hangs up after
+`HFP_PHONE_AUTO_HANGUP_IDLE_SECONDS` seconds of inactivity. With HFP-only
+calling, the reminder target must be a different number than the SIM in the
+paired gateway phone; a phone cannot dial itself through its own cellular line.
+
+### Future caller permissions
+
+The current HFP phone platform can auto-answer and place calls through the
+paired Android phone. Future work should add caller identity and permission
+levels so different callers can use Hermes safely:
+
+| Level | Who | Allowed actions |
+|-------|-----|-----------------|
+| Owner/admin | Your configured owner number | Full assistant access, privileged tools, outbound calls, schedules, reminders, and approvals |
+| Trusted contacts | Whitelisted numbers | Leave messages, request meetings, create pending reminders/tasks for owner approval |
+| Unknown callers | Any non-blocked caller | Basic conversation, voicemail-style messages, callback requests |
+| Blocked callers | Denylist | Reject, ignore, or hang up |
+
+Planned implementation notes:
+
+- Add HFP caller ID support, likely via `+CLIP`, so inbound calls can be mapped
+  to phone numbers instead of only the connected Bluetooth device address.
+- Add config such as `HFP_PHONE_OWNER_NUMBER`, `HFP_PHONE_TRUSTED_NUMBERS`,
+  `HFP_PHONE_BLOCKED_NUMBERS`, and optional contact labels.
+- Gate privileged requests by caller level. Unknown and trusted callers should
+  create pending requests instead of directly executing sensitive tools.
+- Add optional admin activation by keyword or PIN, for example "admin mode" plus
+  a configured code, before allowing high-risk actions.
+- Keep an audit log of caller number, transcript, requested action, approval
+  status, and executed tool/action.
+- Add owner approval flows for meeting requests, reminders, callbacks, and
+  anything that modifies calendars/tasks or triggers external actions.
 
 ### Typical call flow
 
 ```
-1. scan_paired_devices()          → find phone address
-2. connect_phone("AA:BB:CC:DD:EE:FF")
-3. get_call_status()              → wait for connection=connected
-4. dial("+15551234567")
-5. get_call_status()              → poll until call_state=active, audio_active=true
-6. start_audio_stream("call1")       → connect STT/TTS or live voice agent to returned WebSocket
-7. loop:
+1. scan_paired_devices()                  → find phone address
+2. connect_and_wait("AA:BB:CC:DD:EE:FF")  → wait for connection=connected
+3. dial_and_wait("+15551234567")          → wait for call_state=active, audio_active=true
+4. ensure_audio_stream("active-call")     → connect STT/TTS or live voice agent to returned WebSocket
+5. loop:
      WebSocket receive bytes → feed to STT / live model
      WebSocket send TTS bytes → caller hears your AI
-8. hangup()
-9. stop_audio_capture("call1")
+6. hangup()
+7. stop_audio_capture("active-call")
+```
+
+Incoming calls use the same realtime audio path:
+
+```
+1. get_phone_context()                  → recommended_next_action=answer_call
+2. answer_call()
+3. ensure_audio_stream("active-call")
+4. loop:
+     WebSocket receive bytes → feed to STT / live model
+     WebSocket send TTS bytes → caller hears your AI
+5. hangup()
 ```
 
 `audio_active=true` means the phone reports active call audio. `sco_connected=true`
@@ -388,7 +539,7 @@ src/hfp_mcp/
 │   └── session.py     RFCOMMThread (blocking I/O) + ATEventDispatcher (async)
 ├── audio/
 │   └── sco.py         BTPROTO_SCO duplex bridge + AudioManager registry
-└── server.py          FastMCP app, lifespan, 10 MCP tools
+└── server.py          FastMCP app, lifespan, MCP tools
 ```
 
 ## License

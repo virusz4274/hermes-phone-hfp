@@ -6,6 +6,7 @@ from hfp_mcp.hfp.protocol import (
     ATResponse,
     ATResult,
     ATUnsolicited,
+    CMD_ATA,
     parse_cind_definition,
     parse_cind_values,
 )
@@ -63,6 +64,10 @@ def test_parse_ring():
     events = p.feed(_frame("RING"))
     assert isinstance(events[0], ATUnsolicited)
     assert events[0].prefix == "RING"
+
+
+def test_answer_command_is_ata():
+    assert CMD_ATA == "ATA\r"
 
 
 def test_multiple_frames_in_one_feed():

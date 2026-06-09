@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 class CallState(str, Enum):
     IDLE = "idle"
+    INCOMING = "incoming"
     DIALING = "dialing"
     RINGING = "ringing"    # outgoing ring-back heard
     ACTIVE = "active"

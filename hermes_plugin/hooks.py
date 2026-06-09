@@ -21,7 +21,7 @@ _STATE_FILE = Path("/tmp/hfp-mcp-state.json")
 _STATUS_URL = os.environ.get("HFP_MCP_STATUS_URL", "").strip()
 
 # States where the user (or AI) is actively engaged in a call
-_ACTIVE_CALL_STATES = {"dialing", "ringing", "active", "ending"}
+_ACTIVE_CALL_STATES = {"incoming", "dialing", "ringing", "active", "ending"}
 
 
 def _fetch_state() -> dict | None:

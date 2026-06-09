@@ -1,29 +1,21 @@
 [Unit]
 Description=HFP MCP Server (Bluetooth phone calling)
 Documentation=https://github.com/virusz4274/phone-bluetooth-hfp-mcp
-After=bluetooth.service
-Requires=bluetooth.service
 
 [Service]
 Type=simple
-User=pi
-Group=bluetooth
+EnvironmentFile=-%h/.config/hfp-mcp.env
+Environment=PYTHONUNBUFFERED=1
 
-# Path to the virtualenv created by install.sh.
 # A daemonized server must use a network transport (streamable-http) — stdio
 # mode is only for when an MCP client spawns the server itself and manages its
 # stdin/stdout directly (in that case you don't use this unit at all).
-ExecStart=/home/pi/phone-bluetooth-hfp-mcp/.venv/bin/hfp-mcp-server --transport streamable-http
-
+ExecStart=__REPO_DIR__/.venv/bin/hfp-mcp-server --transport streamable-http $HFP_MCP_OPTS
 Restart=on-failure
 RestartSec=5
 
 # Network transport: no stdio MCP channel, so stdin is unused.
 StandardInput=null
-StandardOutput=journal
-StandardError=journal
-
-Environment=PYTHONUNBUFFERED=1
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
