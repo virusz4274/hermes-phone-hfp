@@ -281,14 +281,21 @@ class GeminiLiveManager:
         from google import genai
 
         client = genai.Client(api_key=gemini_api_key())
+        system_instruction = (
+            "You are speaking on a cellular phone call through a Bluetooth "
+            "hands-free gateway. Keep spoken responses brief and natural. "
+            "Use Hermes tools for tasks, memory, permissions, reminders, "
+            "or actions outside the call."
+        )
+        if initial_context.strip():
+            # Initial context is operator/developer context, not something to speak
+            # verbatim to the caller. Put it in the Live config instruction instead
+            # of sending it as realtime user input, otherwise Gemini may read the
+            # instructions out loud at call start.
+            system_instruction = f"{system_instruction}\n\nCall context/instructions:\n{initial_context.strip()}"
         config = {
             "response_modalities": ["AUDIO"],
-            "system_instruction": (
-                "You are speaking on a cellular phone call through a Bluetooth "
-                "hands-free gateway. Keep spoken responses brief and natural. "
-                "Use Hermes tools for tasks, memory, permissions, reminders, "
-                "or actions outside the call."
-            ),
+            "system_instruction": system_instruction,
             "tools": [{"function_declarations": _function_declarations()}],
         }
 
@@ -297,8 +304,6 @@ class GeminiLiveManager:
             async with aiohttp.ClientSession() as http:
                 async with http.ws_connect(stream_url) as ws:
                     self._ws = ws
-                    if initial_context.strip():
-                        await live_session.send_realtime_input(text=initial_context.strip())
                     sender = asyncio.create_task(
                         self._hfp_to_gemini(ws, live_session),
                         name="hfp-to-gemini",
@@ -333,30 +338,40 @@ class GeminiLiveManager:
 
     async def _gemini_to_hfp(self, ws, live_session) -> None:
         resampler = PcmResampler(GEMINI_RECEIVE_RATE, HFP_RATE)
-        async for response in live_session.receive():
-            if self._stop_event.is_set():
-                return
-            await self._handle_tool_calls(response)
-            content = getattr(response, "server_content", None)
-            if content is None:
-                continue
-            input_tx = getattr(content, "input_transcription", None)
-            output_tx = getattr(content, "output_transcription", None)
-            if input_tx is not None and getattr(input_tx, "text", None):
-                self._last_input_transcript = input_tx.text
-            if output_tx is not None and getattr(output_tx, "text", None):
-                self._last_output_transcript = output_tx.text
-            if getattr(content, "interrupted", False) and self._session_id:
-                await self._clear_playback(self._session_id)
-            model_turn = getattr(content, "model_turn", None)
-            parts = getattr(model_turn, "parts", None) or []
-            for part in parts:
-                inline = getattr(part, "inline_data", None)
-                if inline is None:
+        # google-genai's Live receive() iterator is turn-scoped: it can finish
+        # after one model response even though the underlying session should stay
+        # open for the next caller utterance. Keep opening receive iterators until
+        # the call bridge is explicitly stopped or an actual websocket/session
+        # error is raised.
+        while not self._stop_event.is_set():
+            saw_response = False
+            async for response in live_session.receive():
+                saw_response = True
+                if self._stop_event.is_set():
+                    return
+                await self._handle_tool_calls(response)
+                content = getattr(response, "server_content", None)
+                if content is None:
                     continue
-                audio = _inline_data_bytes(getattr(inline, "data", b""))
-                pcm = resampler.convert(audio)
-                await _send_hfp_pcm(ws, pcm)
+                input_tx = getattr(content, "input_transcription", None)
+                output_tx = getattr(content, "output_transcription", None)
+                if input_tx is not None and getattr(input_tx, "text", None):
+                    self._last_input_transcript = input_tx.text
+                if output_tx is not None and getattr(output_tx, "text", None):
+                    self._last_output_transcript = output_tx.text
+                if getattr(content, "interrupted", False) and self._session_id:
+                    await self._clear_playback(self._session_id)
+                model_turn = getattr(content, "model_turn", None)
+                parts = getattr(model_turn, "parts", None) or []
+                for part in parts:
+                    inline = getattr(part, "inline_data", None)
+                    if inline is None:
+                        continue
+                    audio = _inline_data_bytes(getattr(inline, "data", b""))
+                    pcm = resampler.convert(audio)
+                    await _send_hfp_pcm(ws, pcm)
+            if not saw_response:
+                await asyncio.sleep(0.05)
 
     async def _handle_tool_calls(self, response) -> None:
         tool_call = getattr(response, "tool_call", None)

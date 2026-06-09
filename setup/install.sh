@@ -20,6 +20,8 @@ fi
 USER_HOME="$(printf '%s' "$USER_ENTRY" | cut -d: -f6)"
 SERVICE_UID="$(id -u "$SERVICE_USER")"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+USER_SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
+USER_ENV_FILE="$USER_HOME/.config/hfp-mcp.env"
 
 echo "==> Installing system dependencies"
 apt-get update -qq
@@ -65,12 +67,11 @@ systemctl restart bluetooth
 echo "==> Installing Python package"
 # Install into a virtual environment in the repo
 python3 -m venv --system-site-packages "$REPO_DIR/.venv"
-"$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR"
+echo "    → Including Gemini Live optional dependencies"
+"$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR[gemini-live]"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$REPO_DIR/.venv"
 
 echo "==> Installing systemd user service"
-USER_SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
-USER_ENV_FILE="$USER_HOME/.config/hfp-mcp.env"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$USER_SYSTEMD_DIR"
 REPO_DIR_ESCAPED="$(printf '%s' "$REPO_DIR" | sed 's/[#&]/\\&/g')"
 sed "s#__REPO_DIR__#$REPO_DIR_ESCAPED#g" "$SCRIPT_DIR/hfp-mcp.service" > "$USER_SYSTEMD_DIR/hfp-mcp.service"

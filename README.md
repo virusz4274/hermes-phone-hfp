@@ -432,11 +432,10 @@ is disabled by default. When disabled, missing an API key, or missing optional
 dependencies, the Gemini MCP tools are not registered, so agents and Hermes only
 see the classic phone tools.
 
-Install the optional dependencies and enable Gemini Live explicitly:
+The installer includes the Gemini Live Python dependencies. Enable Gemini Live
+explicitly with:
 
 ```bash
-pip install -e ".[gemini-live]"
-
 HFP_GEMINI_LIVE_ENABLED=true
 HFP_GEMINI_API_KEY=...
 HFP_GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview

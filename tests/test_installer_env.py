@@ -35,6 +35,17 @@ def test_render_env_exposes_remote_lan_audio_and_mcp_defaults():
     assert "--audio-host 0.0.0.0" in content
     assert "--audio-public-host 192.168.1.42" in content
     assert "--allowed-host 192.168.1.42:8000" in content
+    assert "HFP_GEMINI_LIVE_ENABLED=true" in content
+    assert "HFP_PHONE_VOICE_MODE=auto" in content
+
+
+def test_installer_includes_gemini_live_optional_dependencies():
+    install_script = (
+        Path(__file__).resolve().parents[1] / "setup" / "install.sh"
+    ).read_text()
+
+    assert "[gemini-live]" in install_script
+    assert "Including Gemini Live optional dependencies" in install_script
 
 
 def test_migrate_env_content_adds_missing_newer_defaults():
