@@ -55,6 +55,7 @@ from .config import (
     AUDIO_STREAM_HOST,
     AUDIO_STREAM_PORT,
 )
+from .gemini_live import GeminiLiveManager, availability as gemini_live_availability
 from .hfp.handshake import HFPHandshaker, HandshakeError
 from .hfp.protocol import CMD_ATA, CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
@@ -72,6 +73,7 @@ STATE_FILE = Path("/tmp/hfp-mcp-state.json")
 _state = HFPState()
 _audio_manager = AudioManager()
 _audio_stream_server: AudioStreamServer | None = None
+_gemini_live_manager: GeminiLiveManager | None = None
 _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
 _dispatcher_task: asyncio.Task | None = None
@@ -554,6 +556,7 @@ async def start_audio_stream(session_id: str) -> dict:
     global _audio_stream_server
 
     session = _audio_manager.get_session(session_id)
+    session_reused = session is not None
     if session is None:
         result = await _open_audio_session(session_id)
         if not result["ok"]:
@@ -567,12 +570,19 @@ async def start_audio_stream(session_id: str) -> dict:
 
     _audio_stream_server.start()
     token = _audio_stream_server.issue_token(session_id)
+    stream_url = _audio_stream_server.stream_url(session_id, token)
     return {
         "ok": True,
         "transport": "websocket",
-        "stream_url": _audio_stream_server.stream_url(session_id, token),
+        "stream_url": stream_url,
+        "client_stream_url": stream_url,
         "session_id": session_id,
         "mtu": session.mtu,
+        "sco_mtu_bytes": session.mtu,
+        "session_reused": session_reused,
+        "client_attached": _audio_stream_server.client_attached(session_id),
+        "token_reissued": True,
+        "health": _audio_stream_server.health(),
         "audio": _audio_stream_server.metadata(),
         "direction": "duplex",
         "message_format": "binary PCM frames in both directions",
@@ -641,8 +651,21 @@ async def stop_audio_capture(session_id: str) -> dict:
         return {"ok": False, "error": f"No session '{session_id}'"}
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _audio_manager.remove_session, session_id)
+    if _audio_stream_server is not None:
+        _audio_stream_server.detach_session(session_id)
     _refresh_sco_connected()
     return {"ok": True}
+
+
+@mcp.tool()
+async def clear_audio_playback(session_id: str = "active-call") -> dict:
+    """Drop queued outbound audio for a realtime call audio session."""
+    session = _audio_manager.get_session(session_id)
+    if not session:
+        return {"ok": False, "error": f"No session '{session_id}'"}
+    loop = asyncio.get_event_loop()
+    cleared = await loop.run_in_executor(None, session.clear_playback)
+    return {"ok": True, "session_id": session_id, "bytes_cleared": cleared}
 
 
 @mcp.tool()
@@ -810,6 +833,87 @@ async def dial_and_play_audio_file(
         await hangup()
 
     return {**result, "dialed": dialed}
+
+
+def _get_gemini_live_manager() -> GeminiLiveManager:
+    global _gemini_live_manager
+    if _gemini_live_manager is None:
+        _gemini_live_manager = GeminiLiveManager(
+            ensure_stream=ensure_audio_stream,
+            clear_playback=clear_audio_playback,
+            hangup=hangup,
+        )
+    return _gemini_live_manager
+
+
+def _register_gemini_live_tools() -> bool:
+    availability = gemini_live_availability()
+    if not availability.get("available"):
+        log.info("Gemini Live MCP tools disabled: %s", availability.get("reason"))
+        return False
+
+    @mcp.tool()
+    async def start_gemini_live_call(
+        session_id: str = "active-call",
+        initial_context: str | None = None,
+    ) -> dict:
+        """
+        Start Gemini Live for the active call.
+
+        Gemini owns the realtime HFP audio WebSocket while this session runs.
+        Hermes or other clients should exchange text/instructions through the
+        Gemini tools instead of opening the audio stream directly.
+        """
+        return await _get_gemini_live_manager().start(session_id, initial_context)
+
+    @mcp.tool()
+    async def stop_gemini_live_call(
+        reason: str | None = None,
+        hangup_after: bool = False,
+    ) -> dict:
+        """Stop the active Gemini Live call session, optionally hanging up."""
+        return await _get_gemini_live_manager().stop(reason, hangup_after)
+
+    @mcp.tool()
+    async def get_gemini_live_status() -> dict:
+        """Return Gemini Live availability and active-session status."""
+        return _get_gemini_live_manager().status()
+
+    @mcp.tool()
+    async def send_gemini_live_text(
+        text: str,
+        urgency: str = "normal",
+        speak_to_caller: bool = True,
+    ) -> dict:
+        """Send text/context/instructions into the active Gemini Live session."""
+        return await _get_gemini_live_manager().send_text(
+            text,
+            urgency=urgency,
+            speak_to_caller=speak_to_caller,
+        )
+
+    @mcp.tool()
+    async def poll_gemini_live_requests(timeout_seconds: float = 5.0) -> dict:
+        """Poll Gemini function calls waiting for Hermes/tool orchestration."""
+        return await _get_gemini_live_manager().poll_requests(timeout_seconds)
+
+    @mcp.tool()
+    async def submit_gemini_live_result(
+        request_id: str,
+        result: str,
+        speak_to_caller: bool = True,
+    ) -> dict:
+        """Return a Hermes/tool result to Gemini for a pending function call."""
+        return await _get_gemini_live_manager().submit_result(
+            request_id,
+            result,
+            speak_to_caller=speak_to_caller,
+        )
+
+    return True
+
+
+GEMINI_LIVE_TOOLS_REGISTERED = _register_gemini_live_tools()
 
 
 async def _open_audio_session(session_id: str) -> dict:

@@ -24,6 +24,10 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
 ]
+gemini-live = [
+    "google-genai>=1.0.0",
+    "aiohttp>=3.9.0",
+]
 
 [project.scripts]
 hfp-mcp-server = "hfp_mcp.server:main"

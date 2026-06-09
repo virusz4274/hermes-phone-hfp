@@ -61,6 +61,18 @@ async def test_stop_audio_capture_keeps_sco_connected_until_last_session(monkeyp
     assert state.sco_connected is False
 
 
+async def test_clear_audio_playback_clears_session_queue(monkeypatch):
+    _state, manager = _fresh_server_state(monkeypatch)
+    session = manager.create_session("one", "AA:BB:CC:DD:EE:FF")
+    with session._pb_lock:
+        session._playback.extend(b"abcdef")
+
+    result = await server.clear_audio_playback("one")
+
+    assert result == {"ok": True, "session_id": "one", "bytes_cleared": 6}
+    assert session._take_playback(1) == b"\x00"
+
+
 def test_convert_audio_file_to_pcm_uses_hfp_format(monkeypatch, tmp_path):
     audio_path = tmp_path / "message.mp3"
     audio_path.write_bytes(b"audio")

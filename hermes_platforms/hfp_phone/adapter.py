@@ -21,6 +21,7 @@ import tempfile
 import time
 import uuid
 import wave
+from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Optional
@@ -59,6 +60,10 @@ ROLE_ADMIN = "admin"
 ROLE_TRUSTED = "trusted"
 ROLE_UNKNOWN = "unknown"
 CALL_SESSION_STATES = {"incoming", "dialing", "ringing", "active", "ending"}
+VOICE_MODE_CLASSIC = "classic"
+VOICE_MODE_GEMINI = "gemini_live"
+VOICE_MODE_AUTO = "auto"
+VOICE_MODES = {VOICE_MODE_CLASSIC, VOICE_MODE_GEMINI, VOICE_MODE_AUTO}
 
 
 class HFPCallNoLongerActive(RuntimeError):
@@ -67,6 +72,11 @@ class HFPCallNoLongerActive(RuntimeError):
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_voice_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    return mode if mode in VOICE_MODES else VOICE_MODE_CLASSIC
 
 
 def _split_csv(value: str) -> set[str]:
@@ -94,6 +104,22 @@ def _classify_caller_role(
     if aliases & trusted_callers:
         return ROLE_TRUSTED
     return ROLE_UNKNOWN
+
+
+def _format_gemini_request(request_item: dict) -> str:
+    name = str(request_item.get("name") or "gemini_request")
+    args = request_item.get("arguments") if isinstance(request_item.get("arguments"), dict) else {}
+    if name == "ask_hermes":
+        task = str(args.get("task") or "").strip()
+        context = str(args.get("context") or "").strip()
+        return f"Gemini Live asks Hermes: {task}" + (f"\nContext: {context}" if context else "")
+    if name == "get_hermes_context":
+        return f"Gemini Live requests Hermes context: {args.get('topic') or ''}".strip()
+    if name == "handoff_to_hermes":
+        return f"Gemini Live requests Hermes handoff: {args.get('reason') or ''}".strip()
+    if name == "notify_hermes":
+        return f"Gemini Live notification: {args.get('event') or ''}".strip()
+    return f"Gemini Live request {name}: {json.dumps(args, sort_keys=True)}"
 
 
 def _looks_like_phone_number(value: str) -> bool:
@@ -232,6 +258,9 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             or "hfp-phone"
         )
         self.session_id = os.getenv("HFP_PHONE_SESSION_ID") or extra.get("session_id") or "active-call"
+        self.voice_mode = _normalize_voice_mode(
+            os.getenv("HFP_PHONE_VOICE_MODE") or extra.get("voice_mode")
+        )
         self.auto_answer = _truthy(os.getenv("HFP_PHONE_AUTO_ANSWER") or extra.get("auto_answer"))
         self.auto_hangup_idle_seconds = float(
             extra.get(
@@ -268,6 +297,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         self._running = False
         self._watch_task: Optional[asyncio.Task] = None
         self._audio_task: Optional[asyncio.Task] = None
+        self._gemini_poll_task: Optional[asyncio.Task] = None
         self._ws = None
         self._active_chat_id = "hfp-phone"
         self._active_caller_id = "unknown"
@@ -275,6 +305,9 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         self._active_call_id: Optional[str] = None
         self._last_state = "disconnected"
         self._idle_hangup_task: Optional[asyncio.Task] = None
+        self._gemini_active = False
+        self._gemini_fallback_to_classic = False
+        self._pending_gemini_request_ids: deque[str] = deque()
 
     async def connect(self) -> bool:
         status = await self._client.call_tool("get_call_status")
@@ -288,7 +321,12 @@ class HFPPhoneAdapter(BasePlatformAdapter):
 
     async def disconnect(self) -> None:
         self._running = False
-        for task in (self._watch_task, self._audio_task, self._idle_hangup_task):
+        for task in (
+            self._watch_task,
+            self._audio_task,
+            self._gemini_poll_task,
+            self._idle_hangup_task,
+        ):
             if task is not None:
                 task.cancel()
         if self._ws is not None:
@@ -300,6 +338,8 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         if not str(content or "").strip():
             return SendResult(success=True, message_id=str(uuid.uuid4()))
         chat_id_str = str(chat_id or "")
+        if self._should_send_via_gemini():
+            return await self._send_via_gemini(chat_id_str, str(content))
         try:
             await self._ensure_outbound_call_for_send(chat_id_str)
             pcm = await _synthesize_pcm_for_call_async(str(content))
@@ -315,6 +355,54 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(uuid.uuid4()))
         except Exception as exc:
             log.error("HFP phone send failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc), retryable=False)
+
+    def _voice_mode(self) -> str:
+        return _normalize_voice_mode(getattr(self, "voice_mode", VOICE_MODE_CLASSIC))
+
+    def _should_send_via_gemini(self) -> bool:
+        if getattr(self, "_gemini_fallback_to_classic", False):
+            return False
+        mode = self._voice_mode()
+        return mode == VOICE_MODE_GEMINI or (
+            mode == VOICE_MODE_AUTO and bool(getattr(self, "_gemini_active", False))
+        )
+
+    async def _send_via_gemini(self, chat_id: str, content: str):
+        try:
+            await self._ensure_gemini_call_for_send(chat_id)
+            request_id = self._pending_gemini_request_ids.popleft() if self._pending_gemini_request_ids else ""
+            if request_id:
+                result = await self._client.call_tool(
+                    "submit_gemini_live_result",
+                    {
+                        "request_id": request_id,
+                        "result": content,
+                        "speak_to_caller": True,
+                    },
+                )
+            else:
+                result = await self._client.call_tool(
+                    "send_gemini_live_text",
+                    {
+                        "text": content,
+                        "urgency": "normal",
+                        "speak_to_caller": True,
+                    },
+                )
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error") or "Gemini Live send failed")
+            self._schedule_idle_hangup()
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
+        except HFPCallNoLongerActive as exc:
+            log.info("HFP Gemini Live reply dropped because call ended: %s", exc)
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
+        except Exception as exc:
+            if self._voice_mode() == VOICE_MODE_AUTO:
+                log.info("Gemini Live send failed in auto mode, falling back to classic: %s", exc)
+                self._gemini_fallback_to_classic = True
+                return await self.send(chat_id, content)
+            log.error("HFP Gemini Live send failed: %s", exc, exc_info=True)
             return SendResult(success=False, error=str(exc), retryable=False)
 
     async def get_chat_info(self, chat_id):
@@ -353,11 +441,11 @@ class HFPPhoneAdapter(BasePlatformAdapter):
                 else:
                     await self.handle_message(self._event(f"Incoming phone call from {address}"))
 
-        if call_state == "active" and status.get("audio_active") and self._audio_task is None:
-            await self._start_audio_stream()
+        if call_state == "active" and status.get("audio_active"):
+            await self._start_call_voice()
 
         if connection == "disconnected" or call_state == "idle":
-            await self._stop_audio_stream()
+            await self._stop_call_voice()
             self._cancel_idle_hangup()
             self._active_call_id = None
 
@@ -365,6 +453,96 @@ class HFPPhoneAdapter(BasePlatformAdapter):
 
     def _can_answer(self, caller: str) -> bool:
         return not self.allowed_callers or caller in self.allowed_callers
+
+    async def _start_call_voice(self) -> None:
+        if self._voice_mode() == VOICE_MODE_CLASSIC or getattr(self, "_gemini_fallback_to_classic", False):
+            if self._audio_task is None:
+                await self._start_audio_stream()
+            return
+
+        result = await self._start_gemini_live()
+        if result.get("ok"):
+            return
+        if self._voice_mode() == VOICE_MODE_AUTO:
+            log.info("Gemini Live unavailable in auto mode, using classic HFP voice: %s", result.get("error"))
+            self._gemini_fallback_to_classic = True
+            if self._audio_task is None:
+                await self._start_audio_stream()
+            return
+        log.warning("Gemini Live voice mode could not start: %s", result.get("error"))
+
+    async def _stop_call_voice(self) -> None:
+        await self._stop_gemini_live()
+        await self._stop_audio_stream()
+        self._gemini_fallback_to_classic = False
+        self._pending_gemini_request_ids.clear()
+
+    async def _start_gemini_live(self) -> dict:
+        if getattr(self, "_gemini_active", False):
+            return {"ok": True, "already_running": True}
+        context = (
+            f"Phone call session {getattr(self, '_active_call_id', '')}. "
+            f"Caller identifier: {getattr(self, '_active_caller_id', 'unknown')}. "
+            f"Caller role: {getattr(self, '_active_caller_role', ROLE_UNKNOWN)}."
+        )
+        result = await self._client.call_tool(
+            "start_gemini_live_call",
+            {
+                "session_id": self.session_id,
+                "initial_context": context,
+            },
+        )
+        if not result.get("ok"):
+            return result
+        self._gemini_active = True
+        if self._gemini_poll_task is None or self._gemini_poll_task.done():
+            self._gemini_poll_task = asyncio.create_task(
+                self._poll_gemini_live_requests(),
+                name="hfp-phone-gemini-poll",
+            )
+        return result
+
+    async def _stop_gemini_live(self) -> None:
+        task = self._gemini_poll_task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            if self._gemini_poll_task is task:
+                self._gemini_poll_task = None
+        if getattr(self, "_gemini_active", False):
+            result = await self._client.call_tool(
+                "stop_gemini_live_call",
+                {"reason": "call ended", "hangup_after": False},
+            )
+            if not result.get("ok"):
+                log.debug("HFP stop_gemini_live_call failed: %s", result.get("error"))
+        self._gemini_active = False
+
+    async def _poll_gemini_live_requests(self) -> None:
+        while self._running and getattr(self, "_gemini_active", False):
+            try:
+                result = await self._client.call_tool(
+                    "poll_gemini_live_requests",
+                    {"timeout_seconds": 5.0},
+                )
+                if not result.get("ok"):
+                    await asyncio.sleep(1.0)
+                    continue
+                requests = result.get("requests") or []
+                if not requests:
+                    await asyncio.sleep(0.1)
+                    continue
+                for request_item in requests:
+                    request_id = str(request_item.get("request_id") or "")
+                    if request_id:
+                        self._pending_gemini_request_ids.append(request_id)
+                    await self.handle_message(self._event(_format_gemini_request(request_item)))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("Gemini Live request poll failed: %s", exc)
+                await asyncio.sleep(1.0)
 
     async def _start_audio_stream(self) -> None:
         if self._audio_task is not None and not self._audio_task.done():
@@ -429,6 +607,41 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         if await self._wait_for_audio_ws():
             return
         raise RuntimeError("Call audio stream did not become ready")
+
+    async def _ensure_gemini_call_for_send(self, chat_id: str) -> None:
+        if getattr(self, "_gemini_active", False):
+            return
+
+        status = await _read_json_url_async(self.status_url)
+        if status.get("call_state") == "active" and status.get("audio_active"):
+            result = await self._start_gemini_live()
+            if result.get("ok"):
+                return
+            raise RuntimeError(result.get("error") or "Could not start Gemini Live")
+
+        if _is_hfp_call_session_id(chat_id):
+            raise HFPCallNoLongerActive(
+                f"Call is no longer active (state: {status.get('call_state') or 'unknown'})"
+            )
+
+        target = self._resolve_call_target(chat_id)
+        if not target:
+            raise RuntimeError(
+                "No outbound phone target configured. Set HFP_PHONE_OWNER_NUMBER "
+                "or send to a phone-number chat_id."
+            )
+
+        result = await self._client.call_tool(
+            "dial_and_wait",
+            {"number": target, "timeout_seconds": self.call_timeout_seconds},
+        )
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or f"Could not dial {target}")
+
+        result = await self._start_gemini_live()
+        if result.get("ok"):
+            return
+        raise RuntimeError(result.get("error") or "Could not start Gemini Live")
 
     def _resolve_call_target(self, chat_id: str) -> str:
         candidate = _strip_hfp_target_prefix(chat_id)
@@ -672,9 +885,10 @@ def _env_enablement() -> dict | None:
     status_url = os.getenv("HFP_PHONE_STATUS_URL", "").strip()
     owner_number = os.getenv("HFP_PHONE_OWNER_NUMBER", "").strip()
     home_channel = os.getenv("HFP_PHONE_HOME_CHANNEL", "").strip()
+    voice_mode = os.getenv("HFP_PHONE_VOICE_MODE", "").strip()
     if not mcp_url:
         return None
-    return {
+    result = {
         "mcp_url": mcp_url or DEFAULT_MCP_URL,
         "status_url": status_url or DEFAULT_STATUS_URL,
         "owner_number": owner_number,
@@ -684,6 +898,9 @@ def _env_enablement() -> dict | None:
             "name": "HFP Phone",
         },
     }
+    if voice_mode:
+        result["voice_mode"] = _normalize_voice_mode(voice_mode)
+    return result
 
 
 def _apply_yaml_config(yaml_cfg: dict, platform_cfg: dict) -> dict | None:
@@ -707,6 +924,7 @@ def _apply_yaml_config(yaml_cfg: dict, platform_cfg: dict) -> dict | None:
         "admin_callers",
         "trusted_callers",
         "session_id",
+        "voice_mode",
         "gateway_restart_notification",
         "unauthorized_dm_behavior",
     }

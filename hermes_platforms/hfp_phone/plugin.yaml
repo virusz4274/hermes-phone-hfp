@@ -58,3 +58,7 @@ optional_env:
     description: "Audio session id to use for active calls"
     prompt: "Audio session id"
     password: false
+  - name: HFP_PHONE_VOICE_MODE
+    description: "Voice mode: classic, gemini_live, or auto. Defaults to classic"
+    prompt: "Phone voice mode"
+    password: false

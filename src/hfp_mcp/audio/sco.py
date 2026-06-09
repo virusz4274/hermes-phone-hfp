@@ -268,6 +268,13 @@ class SCOAudioSession:
                 # Drop the oldest queued audio to bound added latency.
                 del self._playback[:overflow]
 
+    def clear_playback(self) -> int:
+        """Drop queued outbound audio and return the number of bytes cleared."""
+        with self._pb_lock:
+            cleared = len(self._playback)
+            self._playback.clear()
+        return cleared
+
     def queue_playback_b64(self, audio_b64: str) -> int:
         pcm = base64.b64decode(audio_b64)
         self.queue_playback(pcm)

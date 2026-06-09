@@ -319,6 +319,7 @@ protection on, list every name/IP clients use to reach the Pi:
 | `get_audio_chunk(session_id)` | Deprecated/diagnostic: get next captured PCM chunk as base64 |
 | `play_audio(session_id, audio_b64)` | Deprecated/diagnostic: queue raw base64 PCM bytes into the call |
 | `stop_audio_capture(session_id)` | Stop the SCO audio session and free resources |
+| `clear_audio_playback(session_id="active-call")` | Clear queued outbound PCM playback for interruption/correction handling |
 | `cleanup_audio_sessions()` | Stop all SCO sessions and clear stale bridge state |
 
 ### MCP control-plane optimisations
@@ -423,6 +424,55 @@ HFP_PHONE_AUTO_ANSWER=true
 HFP_PHONE_OWNER_NUMBER=+15551234567
 HFP_PHONE_HOME_CHANNEL=+15551234567
 ```
+
+### Optional Gemini Live mode
+
+Gemini Live is an optional capability inside the same `hfp-mcp` MCP server. It
+is disabled by default. When disabled, missing an API key, or missing optional
+dependencies, the Gemini MCP tools are not registered, so agents and Hermes only
+see the classic phone tools.
+
+Install the optional dependencies and enable Gemini Live explicitly:
+
+```bash
+pip install -e ".[gemini-live]"
+
+HFP_GEMINI_LIVE_ENABLED=true
+HFP_GEMINI_API_KEY=...
+HFP_GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
+```
+
+For the installed user service, put these values in `~/.config/hfp-mcp.env` and
+restart `hfp-mcp`; a repo-local `.env` file is not read by the systemd unit.
+
+Hermes voice mode is separate and defaults to classic STT/TTS:
+
+```bash
+# classic: current Hermes STT/TTS behavior
+HFP_PHONE_VOICE_MODE=classic
+
+# gemini_live: Gemini owns call audio; Hermes passes text/results through MCP
+HFP_PHONE_VOICE_MODE=gemini_live
+
+# auto: prefer Gemini when enabled and healthy, otherwise use classic
+HFP_PHONE_VOICE_MODE=auto
+```
+
+When Gemini Live is enabled and healthy, the same MCP endpoint conditionally
+adds:
+
+| Tool | Description |
+|------|-------------|
+| `start_gemini_live_call(session_id="active-call", initial_context=None)` | Start Gemini Live for active call audio |
+| `stop_gemini_live_call(reason=None, hangup_after=false)` | Stop Gemini Live, optionally ending the call |
+| `get_gemini_live_status()` | Report availability, running state, model, and pending requests |
+| `send_gemini_live_text(text, urgency="normal", speak_to_caller=true)` | Send text/context/instructions into the active Live session |
+| `poll_gemini_live_requests(timeout_seconds=5)` | Let Hermes poll Gemini function calls needing Hermes/tool work |
+| `submit_gemini_live_result(request_id, result, speak_to_caller=true)` | Return Hermes/tool results to Gemini |
+
+In Gemini mode, Hermes does not run STT/TTS for the call. Gemini streams caller
+audio directly and asks Hermes for tasks, memory, permissions, or actions through
+the MCP request/result tools above.
 
 Use `.env` for connection/bootstrap values and secrets. Prefer `~/.hermes/config.yaml`
 for policy values such as caller roles and restart-notification behavior because

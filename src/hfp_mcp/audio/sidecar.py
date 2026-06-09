@@ -51,6 +51,8 @@ class AudioStreamServer:
         self._public_host = public_host
         self._tokens: dict[str, dict[str, float]] = {}
         self._tokens_lock = threading.Lock()
+        self._attached: dict[str, int] = {}
+        self._attached_lock = threading.Lock()
         self._started = threading.Event()
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
@@ -124,10 +126,38 @@ class AudioStreamServer:
             "frame_bytes": STREAM_FRAME_BYTES,
         }
 
+    def health(self) -> dict:
+        return {
+            "listening": self._started.is_set(),
+            "bind_host": self.host,
+            "public_host": self.public_host,
+            "port": self.port,
+        }
+
+    def client_attached(self, session_id: str) -> bool:
+        with self._attached_lock:
+            return session_id in self._attached
+
+    def detach_session(self, session_id: str) -> None:
+        with self._attached_lock:
+            self._attached.pop(session_id, None)
+
     def _token_ok(self, session_id: str, token: str) -> bool:
         with self._tokens_lock:
             self._purge_expired_tokens_locked()
             return token in self._tokens.get(session_id, {})
+
+    def _attach_client(self, session_id: str, client_id: int) -> bool:
+        with self._attached_lock:
+            if session_id in self._attached:
+                return False
+            self._attached[session_id] = client_id
+            return True
+
+    def _detach_client(self, session_id: str, client_id: int) -> None:
+        with self._attached_lock:
+            if self._attached.get(session_id) == client_id:
+                self._attached.pop(session_id, None)
 
     def _purge_expired_tokens_locked(self) -> None:
         now = time.monotonic()
@@ -158,8 +188,14 @@ class AudioStreamServer:
                     log.warning("Rejecting HFP audio WebSocket for %s: missing session", session_id)
                     await websocket.close(code=1008)
                     return
+                client_id = id(websocket)
+                if not owner._attach_client(session_id, client_id):
+                    log.warning("Rejecting HFP audio WebSocket for %s: client already attached", session_id)
+                    await websocket.close(code=1008)
+                    return
                 await websocket.accept()
                 websocket.state.session_id = session_id
+                websocket.state.client_id = client_id
                 websocket.state.sender = asyncio.create_task(
                     owner._send_capture(websocket, session_id),
                     name=f"audio-ws-send-{session_id}",
@@ -178,6 +214,10 @@ class AudioStreamServer:
                 sender = getattr(websocket.state, "sender", None)
                 if sender is not None:
                     sender.cancel()
+                session_id = getattr(websocket.state, "session_id", None)
+                client_id = getattr(websocket.state, "client_id", None)
+                if session_id is not None and client_id is not None:
+                    owner._detach_client(session_id, client_id)
 
         return Starlette(routes=[WebSocketRoute("/audio/{session_id}", _AudioEndpoint)])
 

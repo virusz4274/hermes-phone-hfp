@@ -112,7 +112,9 @@ def _adapter_for_audio_tests():
     adapter = HFPPhoneAdapter.__new__(HFPPhoneAdapter)
     adapter._client = _FakeClient()
     adapter.session_id = "test-session"
+    adapter.voice_mode = "classic"
     adapter._audio_task = None
+    adapter._gemini_poll_task = None
     adapter._ws = None
     adapter.owner_number = "123"
     adapter.home_channel = "hfp-phone"
@@ -122,7 +124,12 @@ def _adapter_for_audio_tests():
     adapter._active_caller_role = "unknown"
     adapter._active_call_id = None
     adapter.call_timeout_seconds = 12.0
+    adapter.auto_hangup_idle_seconds = 0
+    adapter._idle_hangup_task = None
     adapter._running = True
+    adapter._gemini_active = False
+    adapter._gemini_fallback_to_classic = False
+    adapter._pending_gemini_request_ids = adapter_mod.deque()
     adapter.stream_runs = 0
 
     async def _run_audio_stream(_stream_url):
@@ -627,6 +634,138 @@ async def test_completed_audio_task_is_cleared_for_restart():
     adapter._audio_task_done(done)
 
     assert adapter._audio_task is None
+
+
+async def test_gemini_voice_mode_send_does_not_use_hermes_tts(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.voice_mode = "gemini_live"
+    adapter.status_url = "http://status.test/status"
+    calls = []
+
+    class _FakeSendResult:
+        def __init__(self, success, message_id=None, error=None, retryable=None):
+            self.success = success
+            self.message_id = message_id
+            self.error = error
+            self.retryable = retryable
+
+    async def _status(_url):
+        return {"call_state": "active", "audio_active": True}
+
+    async def _call_tool(name, arguments=None):
+        calls.append((name, arguments or {}))
+        return {"ok": True}
+
+    async def _should_not_tts(_text):  # pragma: no cover - assertion helper
+        raise AssertionError("Gemini mode must not call Hermes TTS")
+
+    monkeypatch.setattr(adapter_mod, "SendResult", _FakeSendResult)
+    monkeypatch.setattr(adapter_mod, "_read_json_url_async", _status)
+    monkeypatch.setattr(adapter_mod, "_synthesize_pcm_for_call_async", _should_not_tts)
+    adapter._client.call_tool = _call_tool
+
+    result = await adapter.send("hfp-phone:caller:call", "please continue")
+
+    assert result.success is True
+    assert calls[0][0] == "start_gemini_live_call"
+    assert calls[1] == (
+        "send_gemini_live_text",
+        {
+            "text": "please continue",
+            "urgency": "normal",
+            "speak_to_caller": True,
+        },
+    )
+
+
+async def test_gemini_voice_mode_send_submits_pending_request(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.voice_mode = "gemini_live"
+    adapter._gemini_active = True
+    adapter._pending_gemini_request_ids.append("req-1")
+    calls = []
+
+    class _FakeSendResult:
+        def __init__(self, success, message_id=None, error=None, retryable=None):
+            self.success = success
+            self.message_id = message_id
+            self.error = error
+            self.retryable = retryable
+
+    async def _call_tool(name, arguments=None):
+        calls.append((name, arguments or {}))
+        return {"ok": True}
+
+    monkeypatch.setattr(adapter_mod, "SendResult", _FakeSendResult)
+    adapter._client.call_tool = _call_tool
+
+    result = await adapter.send("hfp-phone:caller:call", "done")
+
+    assert result.success is True
+    assert calls == [
+        (
+            "submit_gemini_live_result",
+            {
+                "request_id": "req-1",
+                "result": "done",
+                "speak_to_caller": True,
+            },
+        )
+    ]
+
+
+async def test_auto_voice_mode_falls_back_to_classic_when_gemini_unavailable(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.voice_mode = "auto"
+    started_classic = []
+
+    async def _call_tool(name, arguments=None):
+        if name == "start_gemini_live_call":
+            return {"ok": False, "error": "missing_api_key"}
+        return {"ok": True}
+
+    async def _start_audio_stream():
+        started_classic.append(True)
+
+    adapter._client.call_tool = _call_tool
+    adapter._start_audio_stream = _start_audio_stream
+
+    await adapter._start_call_voice()
+
+    assert started_classic == [True]
+    assert adapter._gemini_fallback_to_classic is True
+
+
+async def test_gemini_request_poll_dispatches_to_hermes(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.voice_mode = "gemini_live"
+    adapter._gemini_active = True
+    handled = []
+
+    async def _call_tool(name, arguments=None):
+        adapter._gemini_active = False
+        return {
+            "ok": True,
+            "requests": [
+                {
+                    "request_id": "req-1",
+                    "name": "ask_hermes",
+                    "arguments": {"task": "set a reminder", "context": "caller asked"},
+                }
+            ],
+        }
+
+    async def _handle_message(event):
+        handled.append(event.text)
+
+    monkeypatch.setattr(adapter, "handle_message", _handle_message, raising=False)
+    adapter._event = lambda text: types.SimpleNamespace(text=text)
+    adapter._client.call_tool = _call_tool
+
+    await adapter._poll_gemini_live_requests()
+
+    assert adapter._pending_gemini_request_ids.popleft() == "req-1"
+    assert handled == ["Gemini Live asks Hermes: set a reminder\nContext: caller asked"]
 
 
 def _install_fake_tools(monkeypatch, *, tts_module=None, transcription_module=None):

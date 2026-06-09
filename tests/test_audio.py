@@ -115,6 +115,15 @@ def test_take_playback_returns_queued_bytes_in_order():
     assert s._take_playback(4) == bytes([8, 9, 0, 0])  # padded
 
 
+def test_clear_playback_drops_queued_bytes():
+    s = SCOAudioSession("call1", "AA:BB:CC:DD:EE:FF")
+    with s._pb_lock:
+        s._playback.extend(b"abcdef")
+
+    assert s.clear_playback() == 6
+    assert s._take_playback(2) == b"\x00\x00"
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -180,6 +189,18 @@ def test_audio_stream_server_uses_explicit_public_host_for_wildcard_bind():
 
     assert server.public_host == "pi.local"
     assert server.stream_url("call1", token).startswith("ws://pi.local:8765/")
+
+
+def test_audio_stream_server_tracks_single_attached_client():
+    server = AudioStreamServer(AudioManager(), "127.0.0.1", 8765)
+
+    assert server._attach_client("call1", 1) is True
+    assert server.client_attached("call1") is True
+    assert server._attach_client("call1", 2) is False
+    server._detach_client("call1", 2)
+    assert server.client_attached("call1") is True
+    server._detach_client("call1", 1)
+    assert server.client_attached("call1") is False
 
 
 def test_audio_stream_server_wildcard_bind_does_not_return_loopback(monkeypatch):
