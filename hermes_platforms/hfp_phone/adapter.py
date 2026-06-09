@@ -297,6 +297,14 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         )
         self._audio_task.add_done_callback(self._audio_task_done)
 
+    async def _wait_for_audio_ws(self, timeout_seconds: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while self._running and time.monotonic() < deadline:
+            if self._ws is not None and not self._ws.closed:
+                return True
+            await asyncio.sleep(0.05)
+        return self._ws is not None and not self._ws.closed
+
     async def _ensure_outbound_call_for_send(self, chat_id: str) -> None:
         if self._ws is not None and not self._ws.closed:
             return
@@ -304,8 +312,9 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         status = await _read_json_url_async(self.status_url)
         if status.get("call_state") == "active" and status.get("audio_active"):
             await self._start_audio_stream()
-            if self._ws is not None:
+            if await self._wait_for_audio_ws():
                 return
+            raise RuntimeError("Call audio stream did not become ready")
 
         target = self._resolve_call_target(chat_id)
         if not target:
@@ -322,11 +331,8 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             raise RuntimeError(result.get("error") or f"Could not dial {target}")
 
         await self._start_audio_stream()
-        deadline = time.monotonic() + 5.0
-        while self._running and time.monotonic() < deadline:
-            if self._ws is not None and not self._ws.closed:
-                return
-            await asyncio.sleep(0.05)
+        if await self._wait_for_audio_ws():
+            return
         raise RuntimeError("Call audio stream did not become ready")
 
     def _resolve_call_target(self, chat_id: str) -> str:
@@ -440,7 +446,7 @@ class HFPPhoneAdapter(BasePlatformAdapter):
 
     async def _send_pcm(self, pcm: bytes) -> None:
         if self._ws is None or self._ws.closed:
-            return
+            raise RuntimeError("Call audio stream is not connected")
         frame_bytes = 640
         for offset in range(0, len(pcm), frame_bytes):
             await self._ws.send_bytes(pcm[offset:offset + frame_bytes])
@@ -504,32 +510,10 @@ def _synthesize_audio_file(text: str) -> Path:
 
     tts_fn = getattr(tts_tool, "text_to_speech_tool", None)
     if tts_fn is None:
-        tts_fn = getattr(tts_tool, "text_to_speech", None)
-    if tts_fn is None:
-        tts_fn = getattr(tts_tool, "tts", None)
-    if tts_fn is None:
-        raise RuntimeError("Hermes TTS tool has no text_to_speech function")
+        raise RuntimeError("Hermes TTS tool has no text_to_speech_tool function")
 
     raw = tts_fn(text=text)
     data = json.loads(raw) if isinstance(raw, str) else raw
-    if not isinstance(data, dict) or not data.get("success"):
-        fallback = os.getenv("HFP_PHONE_TTS_FALLBACK_PROVIDER", "edge").strip().lower()
-        if fallback and fallback not in {"0", "false", "off", "none"}:
-            original_load = getattr(tts_tool, "_load_tts_config", None)
-            if callable(original_load):
-                original_config = original_load()
-
-                def _load_fallback_config():
-                    cfg = dict(original_config or {})
-                    cfg["provider"] = fallback
-                    return cfg
-
-                tts_tool._load_tts_config = _load_fallback_config
-                try:
-                    raw = tts_fn(text=text)
-                    data = json.loads(raw) if isinstance(raw, str) else raw
-                finally:
-                    tts_tool._load_tts_config = original_load
     if not isinstance(data, dict) or not data.get("success"):
         raise RuntimeError(f"TTS failed: {data}")
     path = Path(str(data.get("file_path") or ""))

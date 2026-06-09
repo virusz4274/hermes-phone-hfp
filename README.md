@@ -36,11 +36,12 @@ cd phone-bluetooth-hfp-mcp
 sudo bash setup/install.sh
 ```
 
-The script installs system packages, configures BlueZ, creates a virtualenv,
-installs the Hermes plugin for the invoking user, and installs/enables/starts a
-`systemd --user` service named `hfp-mcp` for remote `streamable-http` access at
-boot. It auto-detects the invoking user from `$SUDO_USER` (so `sudo bash …`
-works on any account, not just `pi`); override explicitly with
+The script installs system packages (including `ffmpeg` for Hermes TTS audio
+conversion), configures BlueZ, creates a virtualenv, installs the Hermes plugins
+for the invoking user, and installs/enables/starts a `systemd --user` service
+named `hfp-mcp` for remote `streamable-http` access at boot. It auto-detects the
+invoking user from `$SUDO_USER` (so `sudo bash …` works on any account, not just
+`pi`); override explicitly with
 `SERVICE_USER=youruser sudo -E bash setup/install.sh`. Re-running is safe —
 every step is idempotent.
 
@@ -117,19 +118,23 @@ The MCP server must run on the Pi (it owns the Bluetooth hardware), but the AI a
 systemctl --user status hfp-mcp
 # MCP endpoint:    http://raspberrypi.local:8000/mcp
 # Status endpoint: http://raspberrypi.local:8001/status
+# Audio streams:   ws://raspberrypi.local:8765/audio/<session_id>?token=...
 ```
 
 If you are not using the installed service, run it manually:
 
 ```bash
-.venv/bin/hfp-mcp-server --transport streamable-http
+.venv/bin/hfp-mcp-server --transport streamable-http \
+    --audio-host 0.0.0.0 --audio-public-host raspberrypi.local
 ```
 
 You can customise the service ports in `~/.config/hfp-mcp.env`, or pass them
 directly when running manually:
 
 ```bash
-.venv/bin/hfp-mcp-server --transport streamable-http --port 8000 --status-port 8001
+.venv/bin/hfp-mcp-server --transport streamable-http \
+    --port 8000 --status-port 8001 \
+    --audio-host 0.0.0.0 --audio-public-host raspberrypi.local
 ```
 
 **On the remote machine** — point your AI app at the Pi:
@@ -163,11 +168,11 @@ export HFP_MCP_STATUS_URL=http://raspberrypi.local:8001/status
 
 Or set it permanently in your shell profile / systemd environment.
 
-> **Security note:** The streamable-http, status, and audio sidecar ports are unauthenticated,
-> and by default the server accepts any `Host` header (DNS-rebinding protection
-> off) so LAN clients can connect — see [Host header / remote clients](#host-header--remote-clients-421-misdirected-request).
-> Keep these ports on a private/home LAN. To restrict which hosts may connect,
-> pass `--allowed-host`. If you need remote access, use an SSH tunnel:
+> **Security note:** Keep the streamable-http, status, and audio sidecar ports on
+> a private/home LAN. MCP accepts any `Host` header by default so LAN clients can
+> connect; the audio sidecar uses per-session tokens returned from MCP tool
+> results. To restrict which HTTP hosts may connect, pass `--allowed-host`. If you
+> need remote access, use an SSH tunnel:
 > ```bash
 > ssh -L 8000:localhost:8000 -L 8001:localhost:8001 -L 8765:localhost:8765 pi@raspberrypi.local
 > ```
@@ -204,18 +209,23 @@ phone to pair or connect.
 hfp-mcp-server
 
 # Remote client over HTTP on default ports — Model B
-hfp-mcp-server --transport streamable-http
+hfp-mcp-server --transport streamable-http \
+    --audio-host 0.0.0.0 --audio-public-host raspberrypi.local
 #   MCP:    http://<pi-host>:8000/mcp
 #   Status: http://<pi-host>:8001/status
+#   Audio:  ws://<pi-host>:8765/audio/<session_id>?token=...
 
 # Custom ports (e.g. if 8000 is taken by Docker/another service)
-hfp-mcp-server --transport streamable-http --port 8080 --status-port 8081
+hfp-mcp-server --transport streamable-http \
+    --port 8080 --status-port 8081 \
+    --audio-host 0.0.0.0 --audio-public-host raspberrypi.local
 
 # Bind to localhost only (pair with an SSH tunnel for remote access)
 hfp-mcp-server --transport streamable-http --host 127.0.0.1
 
 # Lock down to specific hostnames/IPs the clients use to reach the Pi
 hfp-mcp-server --transport streamable-http \
+    --audio-host 0.0.0.0 --audio-public-host raspberrypi.local \
     --allowed-host raspberrypi.local:8000 --allowed-host 10.0.0.200:8000
 ```
 
@@ -247,7 +257,7 @@ journalctl --user -u hfp-mcp -f
 Edit `~/.config/hfp-mcp.env` to change service ports or add flags:
 
 ```bash
-HFP_MCP_OPTS="--port 8000 --status-port 8001"
+HFP_MCP_OPTS="--port 8000 --status-port 8001 --audio-host 0.0.0.0 --audio-public-host raspberrypi.local"
 ```
 
 After editing the env file, restart the service:
@@ -375,6 +385,11 @@ platform named `hfp_phone`: incoming phone audio is transcribed through Hermes
 STT, Hermes responses are synthesized through Hermes TTS, converted to 8 kHz
 mono PCM with `ffmpeg`, and played back into the cellular call over the audio
 WebSocket.
+
+The installer installs Hermes plugins only for `SERVICE_USER` on the machine
+where it runs. If Hermes runs on a different host, copy or install the `hfp-phone`
+plugin on that Hermes host and set the `HFP_PHONE_*` URLs below to point at the
+Pi.
 
 Minimal `.env` values for the machine running `hermes gateway`:
 

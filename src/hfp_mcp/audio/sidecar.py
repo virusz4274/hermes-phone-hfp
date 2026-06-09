@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import socket
 import threading
 from typing import Optional
 
@@ -57,7 +58,10 @@ class AudioStreamServer:
         if self._public_host:
             return self._public_host
         if self.host in ("0.0.0.0", "::"):
-            return "127.0.0.1"
+            hostname = socket.getfqdn()
+            if not hostname or hostname == "localhost":
+                hostname = socket.gethostname()
+            return hostname if hostname and hostname != "localhost" else "localhost"
         return self.host
 
     def start(self) -> None:

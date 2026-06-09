@@ -14,6 +14,7 @@ from hfp_mcp.audio.sco import (
     SCOAudioSession,
 )
 from hfp_mcp.audio.sidecar import AudioStreamServer
+import hfp_mcp.audio.sidecar as sidecar_mod
 from hfp_mcp.config import AUDIO_CHANNELS, AUDIO_CHUNK_FRAMES
 
 
@@ -146,3 +147,19 @@ def test_audio_stream_server_issues_session_tokens_and_metadata():
     assert not server._token_ok("call1", "wrong")
     assert "/audio/call1?token=" in server.stream_url("call1", token)
     assert server.metadata()["frame_bytes"] == STREAM_FRAME_BYTES
+
+
+def test_audio_stream_server_uses_explicit_public_host_for_wildcard_bind():
+    server = AudioStreamServer(AudioManager(), "0.0.0.0", 8765, "pi.local")
+    token = server.issue_token("call1")
+
+    assert server.public_host == "pi.local"
+    assert server.stream_url("call1", token).startswith("ws://pi.local:8765/")
+
+
+def test_audio_stream_server_wildcard_bind_does_not_return_loopback(monkeypatch):
+    monkeypatch.setattr(sidecar_mod.socket, "getfqdn", lambda: "hfp-pi.local")
+    server = AudioStreamServer(AudioManager(), "0.0.0.0", 8765)
+
+    assert server.public_host == "hfp-pi.local"
+    assert not server.stream_url("call1", "token").startswith("ws://127.0.0.1:")

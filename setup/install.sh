@@ -34,7 +34,8 @@ apt-get install -y \
     libbluetooth-dev \
     python3-pip \
     python3-venv \
-    libcairo2-dev
+    libcairo2-dev \
+    ffmpeg
 
 echo "==> Adding ${SERVICE_USER} to bluetooth group"
 usermod -aG bluetooth "$SERVICE_USER" || true
@@ -80,7 +81,9 @@ chown "$SERVICE_USER:$SERVICE_GROUP" "$USER_SYSTEMD_DIR/hfp-mcp.service"
 chmod 644 "$USER_SYSTEMD_DIR/hfp-mcp.service"
 
 if [ ! -f "$USER_ENV_FILE" ]; then
-    install -m 644 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SCRIPT_DIR/hfp-mcp.env.example" "$USER_ENV_FILE"
+    "$REPO_DIR/.venv/bin/python" "$SCRIPT_DIR/render_hfp_env.py" > "$USER_ENV_FILE"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$USER_ENV_FILE"
+    chmod 644 "$USER_ENV_FILE"
 fi
 
 loginctl enable-linger "$SERVICE_USER"
@@ -109,6 +112,10 @@ install -m 644 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$REPO_DIR/hermes_platform
 install -m 644 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$REPO_DIR/hermes_platforms/hfp_phone/adapter.py" "$HERMES_PHONE_PLUGIN_DIR/"
 echo "    → Installed to $HERMES_PHONE_PLUGIN_DIR"
 echo "    → Enable with: hermes plugins enable hfp-phone"
+echo "    → These Hermes plugins were installed only for user '$SERVICE_USER' on this machine."
+echo "      If Hermes runs on another host, copy/enable hfp-phone there and set:"
+echo "      HFP_PHONE_MCP_URL=http://<pi-host>:8000/mcp"
+echo "      HFP_PHONE_STATUS_URL=http://<pi-host>:8001/status"
 
 echo "==> Making Pi discoverable (pair your phone now if not already done)"
 bluetoothctl power on   || true
@@ -125,7 +132,10 @@ echo "║                                                          ║"
 echo "║  2. Check the MCP server:                                ║"
 echo "║     systemctl --user status hfp-mcp                      ║"
 echo "║                                                          ║"
-echo "║  3. Add to your Hermes config.yaml (see README.md):      ║"
-echo "║     mcp_servers: [hfp-mcp]                               ║"
-echo "║     plugins: [hfp-call-awareness]                        ║"
+echo "║  3. Generic MCP endpoint for any calling agent:          ║"
+echo "║     http://<pi-host>:8000/mcp                            ║"
+echo "║                                                          ║"
+echo "║  4. Hermes gateway integration:                          ║"
+echo "║     hermes plugins enable hfp-phone                      ║"
+echo "║     set HFP_PHONE_MCP_URL / HFP_PHONE_STATUS_URL         ║"
 echo "╚══════════════════════════════════════════════════════════╝"

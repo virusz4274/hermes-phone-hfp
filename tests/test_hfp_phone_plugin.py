@@ -1,7 +1,12 @@
 """Tests for the repo-local Hermes HFP phone platform helpers."""
 
 import asyncio
+import json
+import sys
+import types
 import wave
+
+import pytest
 
 from hermes_platforms.hfp_phone.adapter import (
     HFPPhoneAdapter,
@@ -9,8 +14,10 @@ from hermes_platforms.hfp_phone.adapter import (
     _normalize_phone_target,
     _rms_s16le,
     _resolve_standalone_target,
+    _synthesize_audio_file,
     _split_csv,
     _standalone_send,
+    _transcribe_pcm,
     _write_wav,
 )
 import hermes_platforms.hfp_phone.adapter as adapter_mod
@@ -118,6 +125,63 @@ async def test_ensure_outbound_call_dials_home_target(monkeypatch):
     ]
 
 
+async def test_ensure_outbound_call_reuses_active_call_stream(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    calls = []
+
+    async def _call_tool(name, arguments=None):
+        calls.append((name, arguments or {}))
+        return {"ok": True}
+
+    async def _start_audio_stream():
+        adapter._ws = _OpenWs()
+
+    async def _status(_url):
+        return {"call_state": "active", "audio_active": True}
+
+    monkeypatch.setattr(adapter_mod, "_read_json_url_async", _status)
+    adapter._client.call_tool = _call_tool
+    adapter.status_url = "http://status.test/status"
+    adapter._start_audio_stream = _start_audio_stream
+
+    await adapter._ensure_outbound_call_for_send("hfp-phone")
+
+    assert calls == []
+
+
+async def test_ensure_outbound_call_does_not_redial_active_call_without_audio(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    calls = []
+
+    async def _call_tool(name, arguments=None):
+        calls.append((name, arguments or {}))
+        return {"ok": True}
+
+    async def _start_audio_stream():
+        return None
+
+    async def _status(_url):
+        return {"call_state": "active", "audio_active": True}
+
+    monkeypatch.setattr(adapter_mod, "_read_json_url_async", _status)
+    adapter._client.call_tool = _call_tool
+    adapter.status_url = "http://status.test/status"
+    adapter._start_audio_stream = _start_audio_stream
+
+    with pytest.raises(RuntimeError, match="Call audio stream"):
+        await adapter._ensure_outbound_call_for_send("hfp-phone")
+
+    assert calls == []
+
+
+async def test_send_pcm_fails_when_audio_stream_is_not_connected():
+    adapter = _adapter_for_audio_tests()
+    adapter._ws = None
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        await adapter._send_pcm(b"\x00\x00")
+
+
 async def test_standalone_send_dials_streams_and_hangs_up(monkeypatch):
     calls = []
 
@@ -193,3 +257,56 @@ async def test_completed_audio_task_is_cleared_for_restart():
     adapter._audio_task_done(done)
 
     assert adapter._audio_task is None
+
+
+def _install_fake_tools(monkeypatch, *, tts_module=None, transcription_module=None):
+    tools_pkg = types.ModuleType("tools")
+    monkeypatch.setitem(sys.modules, "tools", tools_pkg)
+    if tts_module is not None:
+        monkeypatch.setitem(sys.modules, "tools.tts_tool", tts_module)
+    if transcription_module is not None:
+        monkeypatch.setitem(sys.modules, "tools.transcription_tools", transcription_module)
+
+
+def test_synthesize_audio_file_uses_current_hermes_tts_callable(monkeypatch, tmp_path):
+    audio_path = tmp_path / "reply.mp3"
+    audio_path.write_bytes(b"not-real-audio")
+    calls = []
+    tts_module = types.ModuleType("tools.tts_tool")
+
+    def text_to_speech_tool(*, text):
+        calls.append(text)
+        return json.dumps({"success": True, "file_path": str(audio_path)})
+
+    tts_module.text_to_speech_tool = text_to_speech_tool
+    _install_fake_tools(monkeypatch, tts_module=tts_module)
+
+    assert _synthesize_audio_file("hello") == audio_path
+    assert calls == ["hello"]
+
+
+def test_synthesize_audio_file_rejects_legacy_tts_callable(monkeypatch):
+    tts_module = types.ModuleType("tools.tts_tool")
+    tts_module.text_to_speech = lambda *, text: {"success": True, "file_path": "/tmp/old.mp3"}
+    _install_fake_tools(monkeypatch, tts_module=tts_module)
+
+    with pytest.raises(RuntimeError, match="text_to_speech_tool"):
+        _synthesize_audio_file("hello")
+
+
+def test_transcribe_pcm_uses_current_hermes_stt_callable(monkeypatch):
+    calls = []
+    transcription_module = types.ModuleType("tools.transcription_tools")
+
+    def transcribe_audio(path):
+        calls.append(path)
+        with wave.open(path, "rb") as wav:
+            assert wav.getframerate() == PCM_SAMPLE_RATE
+            assert wav.getnchannels() == 1
+        return {"success": True, "transcript": "  hello from phone  "}
+
+    transcription_module.transcribe_audio = transcribe_audio
+    _install_fake_tools(monkeypatch, transcription_module=transcription_module)
+
+    assert _transcribe_pcm(b"\x00\x00" * 80) == "hello from phone"
+    assert len(calls) == 1
