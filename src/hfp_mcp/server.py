@@ -36,6 +36,7 @@ import threading
 import uuid
 from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -55,7 +56,11 @@ from .config import (
     AUDIO_STREAM_HOST,
     AUDIO_STREAM_PORT,
 )
-from .gemini_live import GeminiLiveManager, availability as gemini_live_availability
+from .gemini_live import (
+    GeminiLiveManager,
+    availability as gemini_live_availability,
+    gemini_live_model,
+)
 from .hfp.handshake import HFPHandshaker, HandshakeError
 from .hfp.protocol import CMD_ATA, CMD_ATD, CMD_CHUP
 from .hfp.session import ATEventDispatcher, RFCOMMThread
@@ -111,6 +116,8 @@ async def _cleanup_all_audio_sessions() -> int:
 def _schedule_call_end_audio_cleanup() -> None:
     loop = _state._asyncio_loop
     if loop is None or loop.is_closed():
+        if _gemini_live_manager is not None:
+            _gemini_live_manager.mark_session_stale("call_ended")
         stopped = _audio_manager.stop_all()
         _state.set_sco_connected(False)
         if stopped:
@@ -118,6 +125,8 @@ def _schedule_call_end_audio_cleanup() -> None:
         return
 
     def _create_cleanup_task() -> None:
+        if _gemini_live_manager is not None:
+            _gemini_live_manager.mark_session_stale("call_ended")
         asyncio.create_task(_cleanup_all_audio_sessions(), name="audio-cleanup")
 
     loop.call_soon_threadsafe(_create_cleanup_task)
@@ -260,6 +269,72 @@ mcp = FastMCP("HFP Phone Controller", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
+
+def _package_version() -> str:
+    try:
+        return version("hfp-mcp")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+@mcp.tool()
+def get_capabilities() -> dict:
+    """Return this server's provider-neutral feature and workflow surface."""
+    gemini_availability = gemini_live_availability()
+    gemini_available = bool(gemini_availability.get("available"))
+    return {
+        "ok": True,
+        "server": "phone-bluetooth-hfp-mcp",
+        "version": _package_version(),
+        "features": {
+            "bluetooth_hfp": True,
+            "realtime_audio_websocket": True,
+            "live_ai": True,
+            "gemini_live": gemini_available,
+            "live_ai_function_calls": True,
+            "audio_file_playback": True,
+            "legacy_base64_audio": True,
+            "call_transcript_history": True,
+        },
+        "providers": {
+            "gemini": {
+                "available": gemini_available,
+                "reason": gemini_availability.get("reason"),
+                "model": gemini_availability.get("model") or gemini_live_model(),
+            }
+        },
+        "preferred_workflows": {
+            "outbound_call": [
+                "get_phone_context",
+                "connect_and_wait",
+                "dial_and_wait",
+                "start_live_ai_call",
+            ],
+            "live_ai_tool_loop": [
+                "poll_live_ai_requests",
+                "submit_live_ai_result",
+            ],
+            "post_call": [
+                "get_call_transcript",
+                "get_last_call_summary",
+                "clear_live_requests",
+            ],
+        },
+        "deprecated_tools": [
+            "start_audio_capture",
+            "get_audio_chunk",
+            "play_audio",
+        ],
+        "compatibility_aliases": {
+            "start_gemini_live_call": "start_live_ai_call",
+            "stop_gemini_live_call": "stop_live_ai_call",
+            "get_gemini_live_status": "get_live_ai_status",
+            "send_gemini_live_text": "send_live_ai_text",
+            "poll_gemini_live_requests": "poll_live_ai_requests",
+            "get_gemini_live_pending_requests": "get_live_ai_pending_requests",
+            "submit_gemini_live_result": "submit_live_ai_result",
+        },
+    }
 
 @mcp.tool()
 async def scan_paired_devices() -> list[dict]:
@@ -835,7 +910,16 @@ async def dial_and_play_audio_file(
     return {**result, "dialed": dialed}
 
 
-def _get_gemini_live_manager() -> GeminiLiveManager:
+def _live_call_context() -> dict:
+    status = _state.snapshot()
+    return {
+        "call_state": status["call_state"],
+        "call_active": status["call_state"] == CallState.ACTIVE.value,
+        "audio_active": bool(status["audio_active"]),
+    }
+
+
+def _get_live_ai_manager() -> GeminiLiveManager:
     global _gemini_live_manager
     if _gemini_live_manager is None:
         _gemini_live_manager = GeminiLiveManager(
@@ -844,6 +928,125 @@ def _get_gemini_live_manager() -> GeminiLiveManager:
             hangup=hangup,
         )
     return _gemini_live_manager
+
+
+def _get_gemini_live_manager() -> GeminiLiveManager:
+    return _get_live_ai_manager()
+
+
+@mcp.tool()
+async def start_live_ai_call(
+    session_id: str = "active-call",
+    initial_context: str | None = None,
+) -> dict:
+    """
+    Start the configured provider-neutral Live AI call session.
+
+    Gemini is currently the only provider implementation. The generic tool name
+    is the stable MCP contract for future providers.
+    """
+    return await _get_live_ai_manager().start(session_id, initial_context)
+
+
+@mcp.tool()
+async def stop_live_ai_call(
+    reason: str | None = None,
+    hangup_after: bool = False,
+) -> dict:
+    """Stop the active Live AI session, optionally hanging up the phone call."""
+    return await _get_live_ai_manager().stop(reason, hangup_after)
+
+
+@mcp.tool()
+async def get_live_ai_status() -> dict:
+    """Return provider availability, request counts, and call/session coupling."""
+    return _get_live_ai_manager().status(_live_call_context())
+
+
+@mcp.tool()
+async def send_live_instruction(text: str, urgency: str = "normal") -> dict:
+    """Send internal context to the live assistant without speaking it verbatim."""
+    return await _get_live_ai_manager().send_text(
+        text,
+        urgency=urgency,
+        speak_to_caller=False,
+    )
+
+
+@mcp.tool()
+async def speak_to_caller(text: str, urgency: str = "normal") -> dict:
+    """Send text that should be spoken to the caller by the live assistant."""
+    return await _get_live_ai_manager().speak(text, urgency=urgency)
+
+
+@mcp.tool()
+async def send_live_ai_text(
+    text: str,
+    urgency: str = "normal",
+    speak_to_caller: bool = False,
+) -> dict:
+    """Send text to the active Live AI session; defaults to internal context."""
+    return await _get_live_ai_manager().send_text(
+        text,
+        urgency=urgency,
+        speak_to_caller=speak_to_caller,
+    )
+
+
+@mcp.tool()
+async def poll_live_ai_requests(timeout_seconds: float = 5.0) -> dict:
+    """Poll provider function calls waiting for MCP-client/tool orchestration."""
+    return await _get_live_ai_manager().poll_requests(timeout_seconds)
+
+
+@mcp.tool()
+def get_live_ai_pending_requests() -> dict:
+    """Return function calls already polled but not yet answered."""
+    return _get_live_ai_manager().pending_requests()
+
+
+@mcp.tool()
+async def submit_live_ai_result(
+    request_id: str,
+    result: str,
+    speak_to_caller: bool = True,
+) -> dict:
+    """Return an MCP client/tool result to the active Live AI provider."""
+    return await _get_live_ai_manager().submit_result(
+        request_id,
+        result,
+        speak_to_caller=speak_to_caller,
+    )
+
+
+@mcp.tool()
+def cancel_live_request(request_id: str, reason: str = "cancelled") -> dict:
+    """Mark one unresolved Live AI request stale/cancelled."""
+    return _get_live_ai_manager().cancel_request(request_id, reason)
+
+
+@mcp.tool()
+def clear_live_requests(
+    session_id: str | None = None,
+    only_stale: bool = True,
+) -> dict:
+    """Clear stale/cancelled Live AI requests, or all unresolved requests."""
+    return _get_live_ai_manager().clear_requests(
+        session_id,
+        only_stale=only_stale,
+    )
+
+
+@mcp.tool()
+def get_call_transcript(session_id: str | None = None) -> dict:
+    """Return raw transcript events for the latest or requested live call."""
+    return _get_live_ai_manager().get_call_transcript(session_id)
+
+
+@mcp.tool()
+def get_last_call_summary(session_id: str | None = None) -> dict:
+    """Return a deterministic digest of the latest or requested call transcript."""
+    return _get_live_ai_manager().get_last_call_summary(session_id)
 
 
 def _register_gemini_live_tools() -> bool:
@@ -864,7 +1067,7 @@ def _register_gemini_live_tools() -> bool:
         MCP clients or orchestrators should exchange text/instructions through
         the Gemini tools instead of opening the audio stream directly.
         """
-        return await _get_gemini_live_manager().start(session_id, initial_context)
+        return await start_live_ai_call(session_id, initial_context)
 
     @mcp.tool()
     async def stop_gemini_live_call(
@@ -872,12 +1075,12 @@ def _register_gemini_live_tools() -> bool:
         hangup_after: bool = False,
     ) -> dict:
         """Stop the active Gemini Live call session, optionally hanging up."""
-        return await _get_gemini_live_manager().stop(reason, hangup_after)
+        return await stop_live_ai_call(reason, hangup_after)
 
     @mcp.tool()
     async def get_gemini_live_status() -> dict:
         """Return Gemini Live availability and active-session status."""
-        return _get_gemini_live_manager().status()
+        return await get_live_ai_status()
 
     @mcp.tool()
     async def send_gemini_live_text(
@@ -885,8 +1088,13 @@ def _register_gemini_live_tools() -> bool:
         urgency: str = "normal",
         speak_to_caller: bool = True,
     ) -> dict:
-        """Send text/context/instructions into the active Gemini Live session."""
-        return await _get_gemini_live_manager().send_text(
+        """Compatibility alias for send_live_ai_text.
+
+        This keeps the historical speak_to_caller=true default for existing
+        Gemini clients. New clients should use send_live_instruction() or
+        speak_to_caller() for safer intent-specific behavior.
+        """
+        return await send_live_ai_text(
             text,
             urgency=urgency,
             speak_to_caller=speak_to_caller,
@@ -895,7 +1103,7 @@ def _register_gemini_live_tools() -> bool:
     @mcp.tool()
     async def poll_gemini_live_requests(timeout_seconds: float = 5.0) -> dict:
         """Poll Gemini function calls waiting for MCP-client/tool orchestration."""
-        return await _get_gemini_live_manager().poll_requests(timeout_seconds)
+        return await poll_live_ai_requests(timeout_seconds)
 
     @mcp.tool()
     def get_gemini_live_pending_requests() -> dict:
@@ -907,7 +1115,7 @@ def _register_gemini_live_tools() -> bool:
         submit_gemini_live_result(), and this tool exposes those reserved
         request IDs if a client disconnects or needs to resume orchestration.
         """
-        return _get_gemini_live_manager().pending_requests()
+        return get_live_ai_pending_requests()
 
     @mcp.tool()
     async def submit_gemini_live_result(
@@ -916,7 +1124,7 @@ def _register_gemini_live_tools() -> bool:
         speak_to_caller: bool = True,
     ) -> dict:
         """Return an MCP client/tool result to Gemini for a pending function call."""
-        return await _get_gemini_live_manager().submit_result(
+        return await submit_live_ai_result(
             request_id,
             result,
             speak_to_caller=speak_to_caller,

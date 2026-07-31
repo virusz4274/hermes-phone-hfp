@@ -122,6 +122,13 @@ def _format_gemini_request(request_item: dict) -> str:
     return f"Gemini Live request {name}: {json.dumps(args, sort_keys=True)}"
 
 
+def _mcp_tool_missing(result: dict) -> bool:
+    if result.get("ok") is not False:
+        return False
+    error = str(result.get("error") or "").lower()
+    return "not found" in error or "unknown tool" in error
+
+
 def _looks_like_phone_number(value: str) -> bool:
     cleaned = value.strip().removeprefix("tel:")
     digits = [ch for ch in cleaned if ch.isdigit()]
@@ -373,7 +380,8 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             await self._ensure_gemini_call_for_send(chat_id)
             request_id = self._pending_gemini_request_ids.popleft() if self._pending_gemini_request_ids else ""
             if request_id:
-                result = await self._client.call_tool(
+                result = await self._call_live_tool(
+                    "submit_live_ai_result",
                     "submit_gemini_live_result",
                     {
                         "request_id": request_id,
@@ -382,12 +390,12 @@ class HFPPhoneAdapter(BasePlatformAdapter):
                     },
                 )
             else:
-                result = await self._client.call_tool(
+                result = await self._call_live_tool(
+                    "speak_to_caller",
                     "send_gemini_live_text",
                     {
                         "text": content,
                         "urgency": "normal",
-                        "speak_to_caller": True,
                     },
                 )
             if not result.get("ok"):
@@ -485,7 +493,8 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             f"Caller identifier: {getattr(self, '_active_caller_id', 'unknown')}. "
             f"Caller role: {getattr(self, '_active_caller_role', ROLE_UNKNOWN)}."
         )
-        result = await self._client.call_tool(
+        result = await self._call_live_tool(
+            "start_live_ai_call",
             "start_gemini_live_call",
             {
                 "session_id": self.session_id,
@@ -511,7 +520,8 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             if self._gemini_poll_task is task:
                 self._gemini_poll_task = None
         if getattr(self, "_gemini_active", False):
-            result = await self._client.call_tool(
+            result = await self._call_live_tool(
+                "stop_live_ai_call",
                 "stop_gemini_live_call",
                 {"reason": "call ended", "hangup_after": False},
             )
@@ -523,9 +533,14 @@ class HFPPhoneAdapter(BasePlatformAdapter):
         while self._running and getattr(self, "_gemini_active", False):
             try:
                 result = await self._client.call_tool(
-                    "poll_gemini_live_requests",
+                    "poll_live_ai_requests",
                     {"timeout_seconds": 5.0},
                 )
+                if _mcp_tool_missing(result):
+                    result = await self._client.call_tool(
+                        "poll_gemini_live_requests",
+                        {"timeout_seconds": 5.0},
+                    )
                 if not result.get("ok"):
                     await asyncio.sleep(1.0)
                     continue
@@ -543,6 +558,17 @@ class HFPPhoneAdapter(BasePlatformAdapter):
             except Exception as exc:
                 log.debug("Gemini Live request poll failed: %s", exc)
                 await asyncio.sleep(1.0)
+
+    async def _call_live_tool(
+        self,
+        primary: str,
+        fallback: str,
+        arguments: Optional[dict] = None,
+    ) -> dict:
+        result = await self._client.call_tool(primary, arguments or {})
+        if _mcp_tool_missing(result):
+            return await self._client.call_tool(fallback, arguments or {})
+        return result
 
     async def _start_audio_stream(self) -> None:
         if self._audio_task is not None and not self._audio_task.done():

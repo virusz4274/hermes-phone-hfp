@@ -6,6 +6,7 @@ import pytest
 from hfp_mcp.gemini_orchestrator import (
     GeminiMCPOrchestrator,
     GeminiToolRequest,
+    HfpMCPGeminiClient,
     LocalActionExecutor,
     build_parser,
     merge_requests,
@@ -208,6 +209,65 @@ def test_coerce_tool_result_accepts_structured_content():
     result = types.SimpleNamespace(structuredContent={"ok": True, "requests": []})
 
     assert _coerce_tool_result("tool", result) == {"ok": True, "requests": []}
+
+
+class FakeToolSession:
+    def __init__(self, *, missing_generic: bool = False):
+        self.calls = []
+        self.missing_generic = missing_generic
+
+    async def call_tool(self, name, args):
+        self.calls.append((name, args))
+        if self.missing_generic and name in {
+            "poll_live_ai_requests",
+            "get_live_ai_pending_requests",
+            "submit_live_ai_result",
+            "get_live_ai_status",
+        }:
+            return types.SimpleNamespace(
+                structuredContent={"ok": False, "error": f"Unknown tool: {name}"}
+            )
+        return types.SimpleNamespace(structuredContent={"ok": True, "requests": []})
+
+
+async def test_hfp_mcp_client_prefers_generic_live_ai_tools():
+    client = HfpMCPGeminiClient("http://example.test/mcp")
+    session = FakeToolSession()
+    client._session = session
+
+    await client.poll_requests(0.1)
+    await client.pending_requests()
+    await client.submit_result("req-1", "done")
+    await client.live_status()
+
+    assert [call[0] for call in session.calls] == [
+        "poll_live_ai_requests",
+        "get_live_ai_pending_requests",
+        "submit_live_ai_result",
+        "get_live_ai_status",
+    ]
+
+
+async def test_hfp_mcp_client_falls_back_to_gemini_aliases_when_generic_missing():
+    client = HfpMCPGeminiClient("http://example.test/mcp")
+    session = FakeToolSession(missing_generic=True)
+    client._session = session
+
+    await client.poll_requests(0.1)
+    await client.pending_requests()
+    await client.submit_result("req-1", "done")
+    await client.live_status()
+
+    assert [call[0] for call in session.calls] == [
+        "poll_live_ai_requests",
+        "poll_gemini_live_requests",
+        "get_live_ai_pending_requests",
+        "get_gemini_live_pending_requests",
+        "submit_live_ai_result",
+        "submit_gemini_live_result",
+        "get_live_ai_status",
+        "get_gemini_live_status",
+    ]
 
 
 def test_cli_parser_accepts_allowed_dir_and_file_create_flag(tmp_path):

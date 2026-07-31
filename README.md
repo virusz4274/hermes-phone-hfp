@@ -301,6 +301,7 @@ protection on, list every name/IP clients use to reach the Pi:
 
 | Tool | Description |
 |------|-------------|
+| `get_capabilities()` | Provider-neutral feature, workflow, provider, and compatibility summary |
 | `scan_paired_devices()` | List paired phones (HFP Audio Gateway devices) |
 | `connect_phone(address)` | Connect to phone by BT address |
 | `connect_and_wait(address, timeout_seconds=15)` | Connect and wait until HFP is ready |
@@ -458,14 +459,34 @@ HFP_PHONE_VOICE_MODE=auto
 ```
 
 When Gemini Live is enabled and healthy, the same MCP endpoint conditionally
-adds:
+adds the Gemini compatibility aliases. The provider-neutral Live AI tools are
+the preferred client contract:
+
+| Tool | Description |
+|------|-------------|
+| `start_live_ai_call(session_id="active-call", initial_context=None)` | Start the configured Live AI provider for active call audio |
+| `stop_live_ai_call(reason=None, hangup_after=false)` | Stop Live AI, optionally ending the call |
+| `get_live_ai_status()` | Report provider availability, running state, call coupling, and queued/pending/stale request counts |
+| `send_live_instruction(text, urgency="normal")` | Send internal context/instructions without speaking them verbatim |
+| `speak_to_caller(text, urgency="normal")` | Explicitly send text to be spoken to the caller |
+| `send_live_ai_text(text, urgency="normal", speak_to_caller=false)` | Generic text send helper; defaults to internal context |
+| `poll_live_ai_requests(timeout_seconds=5)` | Let an MCP client/orchestrator poll provider function calls needing outside work |
+| `get_live_ai_pending_requests()` | Recover provider function calls already polled but not answered |
+| `submit_live_ai_result(request_id, result, speak_to_caller=true)` | Return MCP client/tool results to the provider |
+| `cancel_live_request(request_id, reason="cancelled")` | Mark one unresolved provider request stale/cancelled |
+| `clear_live_requests(session_id=None, only_stale=true)` | Clear stale/cancelled requests by default |
+| `get_call_transcript(session_id=None)` | Return raw transcript events for the latest or requested live call |
+| `get_last_call_summary(session_id=None)` | Return a deterministic digest of stored transcript events |
+
+For compatibility, Gemini-specific names remain available when Gemini is
+enabled:
 
 | Tool | Description |
 |------|-------------|
 | `start_gemini_live_call(session_id="active-call", initial_context=None)` | Start Gemini Live for active call audio |
 | `stop_gemini_live_call(reason=None, hangup_after=false)` | Stop Gemini Live, optionally ending the call |
-| `get_gemini_live_status()` | Report availability, running state, model, and pending requests |
-| `send_gemini_live_text(text, urgency="normal", speak_to_caller=true)` | Send text/context/instructions into the active Live session |
+| `get_gemini_live_status()` | Compatibility alias for `get_live_ai_status()` |
+| `send_gemini_live_text(text, urgency="normal", speak_to_caller=true)` | Compatibility alias for `send_live_ai_text()` with the historical spoken default |
 | `poll_gemini_live_requests(timeout_seconds=5)` | Let an MCP client/orchestrator poll Gemini function calls needing outside work |
 | `get_gemini_live_pending_requests()` | Recover Gemini function calls already polled but not answered |
 | `submit_gemini_live_result(request_id, result, speak_to_caller=true)` | Return MCP client/tool results to Gemini |

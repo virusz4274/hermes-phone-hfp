@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import importlib.util
 import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
+
+from .live_ai import LiveAIManager, LiveAIRequest
 
 log = logging.getLogger(__name__)
 
@@ -64,21 +64,8 @@ def availability() -> dict:
     return {"available": True, "reason": "ok", "model": gemini_live_model()}
 
 
-@dataclass
-class GeminiRequest:
-    request_id: str
-    function_call_id: str
-    name: str
-    arguments: dict
-    created_at: float
-
-    def to_dict(self) -> dict:
-        return {
-            "request_id": self.request_id,
-            "name": self.name,
-            "arguments": self.arguments,
-            "created_at": self.created_at,
-        }
+class GeminiRequest(LiveAIRequest):
+    """Compatibility name for Gemini function-call requests."""
 
 
 class PcmResampler:
@@ -108,7 +95,7 @@ ClearPlayback = Callable[[str], Awaitable[dict]]
 HangupCall = Callable[[], Awaitable[dict]]
 
 
-class GeminiLiveManager:
+class GeminiLiveManager(LiveAIManager):
     """Owns at most one Gemini Live call session."""
 
     def __init__(
@@ -118,179 +105,27 @@ class GeminiLiveManager:
         clear_playback: ClearPlayback,
         hangup: HangupCall,
     ) -> None:
-        self._ensure_stream = ensure_stream
-        self._clear_playback = clear_playback
-        self._hangup = hangup
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event = asyncio.Event()
-        self._ws = None
-        self._live_session = None
-        self._session_id = ""
-        self._started_at: float | None = None
-        self._last_error = ""
-        self._last_input_transcript = ""
-        self._last_output_transcript = ""
-        self._requests: asyncio.Queue[GeminiRequest] = asyncio.Queue()
-        self._pending: dict[str, GeminiRequest] = {}
-
-    def status(self) -> dict:
-        avail = availability()
-        running = self._task is not None and not self._task.done()
-        return {
-            "ok": True,
-            "available": bool(avail.get("available")),
-            "availability_reason": avail.get("reason"),
-            "model": gemini_live_model(),
-            "running": running,
-            "session_id": self._session_id or None,
-            "uptime_seconds": (
-                max(0.0, time.monotonic() - self._started_at)
-                if self._started_at is not None and running
-                else None
-            ),
-            "pending_requests": len(self._pending) + self._requests.qsize(),
-            "last_error": self._last_error or None,
-            "last_input_transcript": self._last_input_transcript or None,
-            "last_output_transcript": self._last_output_transcript or None,
-        }
-
-    def pending_requests(self) -> dict:
-        """Return Gemini tool calls that have been polled but not answered.
-
-        poll_requests() moves tool calls from the live queue into _pending so a
-        client can answer them later with submit_result(). Generic MCP clients
-        may disconnect, crash, or poll in one process and submit from another;
-        this method makes those outstanding request IDs recoverable without
-        depending on any specific client implementation.
-        """
-        return {
-            "ok": True,
-            "requests": [item.to_dict() for item in self._pending.values()],
-        }
-
-    async def start(self, session_id: str = "active-call", initial_context: str | None = None) -> dict:
-        avail = availability()
-        if not avail.get("available"):
-            return {"ok": False, "error": avail.get("reason") or "gemini_unavailable"}
-        if self._task is not None and not self._task.done():
-            return {"ok": True, "session_id": self._session_id, "already_running": True}
-
-        stream = await self._ensure_stream(session_id)
-        if not stream.get("ok"):
-            return stream
-        stream_url = stream.get("client_stream_url") or stream.get("stream_url")
-        if not stream_url:
-            return {"ok": False, "error": "audio_stream_url_missing"}
-
-        self._stop_event = asyncio.Event()
-        self._session_id = session_id
-        self._started_at = time.monotonic()
-        self._last_error = ""
-        self._task = asyncio.create_task(
-            self._run(stream_url, initial_context or ""),
-            name=f"gemini-live-{session_id}",
+        super().__init__(
+            provider="gemini",
+            model=gemini_live_model,
+            availability=availability,
+            ensure_stream=ensure_stream,
+            clear_playback=clear_playback,
+            hangup=hangup,
         )
-        self._task.add_done_callback(self._task_done)
-        return {"ok": True, "session_id": session_id, "model": gemini_live_model()}
-
-    async def stop(self, reason: str | None = None, hangup: bool = False) -> dict:
-        self._stop_event.set()
-        if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        if self._ws is not None:
-            with contextlib.suppress(Exception):
-                await self._ws.close()
-            self._ws = None
         self._live_session = None
-        if self._session_id:
-            await self._clear_playback(self._session_id)
-        if hangup:
-            await self._hangup()
-        session_id, self._session_id = self._session_id, ""
-        self._started_at = None
-        return {"ok": True, "session_id": session_id or None, "reason": reason}
-
-    async def send_text(
-        self,
-        text: str,
-        *,
-        urgency: str = "normal",
-        speak_to_caller: bool = True,
-    ) -> dict:
-        if not text.strip():
-            return {"ok": False, "error": "empty_text"}
-        session = self._live_session
-        if session is None:
-            return {"ok": False, "error": "gemini_live_not_running"}
-        if urgency == "urgent" and self._session_id:
-            await self._clear_playback(self._session_id)
-        prefix = ""
-        if not speak_to_caller:
-            prefix = "Internal context update for the assistant. Do not speak this verbatim: "
-        await session.send_realtime_input(text=f"{prefix}{text}")
-        return {"ok": True}
-
-    async def poll_requests(self, timeout_seconds: float = 5.0) -> dict:
-        timeout = max(0.0, float(timeout_seconds))
-        requests: list[dict] = []
-        try:
-            first = await asyncio.wait_for(self._requests.get(), timeout=timeout)
-            self._pending[first.request_id] = first
-            requests.append(first.to_dict())
-        except asyncio.TimeoutError:
-            return {"ok": True, "requests": []}
-
-        while True:
-            try:
-                item = self._requests.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            self._pending[item.request_id] = item
-            requests.append(item.to_dict())
-        return {"ok": True, "requests": requests}
-
-    async def submit_result(
-        self,
-        request_id: str,
-        result: str,
-        *,
-        speak_to_caller: bool = True,
-    ) -> dict:
-        request = self._pending.pop(request_id, None)
-        if request is None:
-            return {"ok": False, "error": "request_not_found"}
-        session = self._live_session
-        if session is None:
-            return {"ok": False, "error": "gemini_live_not_running"}
-
-        from google.genai import types
-
-        function_response = types.FunctionResponse(
-            id=request.function_call_id,
-            name=request.name,
-            response={
-                "result": result,
-                "speak_to_caller": bool(speak_to_caller),
-            },
-        )
-        await session.send_tool_response(function_responses=[function_response])
-        return {"ok": True}
 
     def _task_done(self, task: asyncio.Task) -> None:
+        super()._task_done(task)
         if self._task is task and task.cancelled():
             return
-        if self._task is task:
-            self._task = None
         if not task.cancelled():
             exc = task.exception()
             if exc is not None:
                 self._last_error = str(exc)
                 log.error("Gemini Live session failed: %s", exc, exc_info=True)
 
-    async def _run(self, stream_url: str, initial_context: str) -> None:
+    async def _run_provider(self, stream_url: str, initial_context: str) -> None:
         import aiohttp
         from google import genai
 
@@ -335,6 +170,38 @@ class GeminiLiveManager:
                     for task in done:
                         task.result()
 
+    async def _send_provider_text(self, text: str) -> None:
+        if self._live_session is None:
+            raise RuntimeError("gemini_live_not_running")
+        await self._live_session.send_realtime_input(text=text)
+
+    async def _submit_provider_result(
+        self,
+        request: LiveAIRequest,
+        result: str,
+        *,
+        speak_to_caller: bool,
+    ) -> None:
+        if self._live_session is None:
+            raise RuntimeError("gemini_live_not_running")
+
+        from google.genai import types
+
+        function_response = types.FunctionResponse(
+            id=request.function_call_id,
+            name=request.name,
+            response={
+                "result": result,
+                "speak_to_caller": bool(speak_to_caller),
+            },
+        )
+        await self._live_session.send_tool_response(
+            function_responses=[function_response]
+        )
+
+    async def _close_provider_session(self) -> None:
+        self._live_session = None
+
     async def _hfp_to_gemini(self, ws, live_session) -> None:
         import aiohttp
         from google.genai import types
@@ -370,9 +237,9 @@ class GeminiLiveManager:
                 input_tx = getattr(content, "input_transcription", None)
                 output_tx = getattr(content, "output_transcription", None)
                 if input_tx is not None and getattr(input_tx, "text", None):
-                    self._last_input_transcript = input_tx.text
+                    self.add_transcript("input", input_tx.text)
                 if output_tx is not None and getattr(output_tx, "text", None):
-                    self._last_output_transcript = output_tx.text
+                    self.add_transcript("output", output_tx.text)
                 if getattr(content, "interrupted", False) and self._session_id:
                     await self._clear_playback(self._session_id)
                 model_turn = getattr(content, "model_turn", None)
@@ -398,8 +265,10 @@ class GeminiLiveManager:
                 name=str(getattr(fc, "name", "") or "unknown"),
                 arguments=dict(getattr(fc, "args", None) or {}),
                 created_at=time.time(),
+                session_id=self._session_id,
+                provider=self.provider,
             )
-            await self._requests.put(item)
+            self.add_request(item)
 
 
 async def _send_hfp_pcm(ws, pcm: bytes) -> None:

@@ -667,15 +667,51 @@ async def test_gemini_voice_mode_send_does_not_use_hermes_tts(monkeypatch):
     result = await adapter.send("hfp-phone:caller:call", "please continue")
 
     assert result.success is True
-    assert calls[0][0] == "start_gemini_live_call"
+    assert calls[0][0] == "start_live_ai_call"
     assert calls[1] == (
-        "send_gemini_live_text",
+        "speak_to_caller",
         {
             "text": "please continue",
             "urgency": "normal",
-            "speak_to_caller": True,
         },
     )
+
+
+async def test_gemini_voice_mode_falls_back_to_compat_live_tools(monkeypatch):
+    adapter = _adapter_for_audio_tests()
+    adapter.voice_mode = "gemini_live"
+    adapter.status_url = "http://status.test/status"
+    calls = []
+
+    class _FakeSendResult:
+        def __init__(self, success, message_id=None, error=None, retryable=None):
+            self.success = success
+            self.message_id = message_id
+            self.error = error
+            self.retryable = retryable
+
+    async def _status(_url):
+        return {"call_state": "active", "audio_active": True}
+
+    async def _call_tool(name, arguments=None):
+        calls.append((name, arguments or {}))
+        if name in {"start_live_ai_call", "speak_to_caller"}:
+            return {"ok": False, "error": f"Unknown tool: {name}"}
+        return {"ok": True}
+
+    monkeypatch.setattr(adapter_mod, "SendResult", _FakeSendResult)
+    monkeypatch.setattr(adapter_mod, "_read_json_url_async", _status)
+    adapter._client.call_tool = _call_tool
+
+    result = await adapter.send("hfp-phone:caller:call", "please continue")
+
+    assert result.success is True
+    assert [call[0] for call in calls] == [
+        "start_live_ai_call",
+        "start_gemini_live_call",
+        "speak_to_caller",
+        "send_gemini_live_text",
+    ]
 
 
 async def test_gemini_voice_mode_send_submits_pending_request(monkeypatch):
@@ -704,7 +740,7 @@ async def test_gemini_voice_mode_send_submits_pending_request(monkeypatch):
     assert result.success is True
     assert calls == [
         (
-            "submit_gemini_live_result",
+            "submit_live_ai_result",
             {
                 "request_id": "req-1",
                 "result": "done",
@@ -720,7 +756,7 @@ async def test_auto_voice_mode_falls_back_to_classic_when_gemini_unavailable(mon
     started_classic = []
 
     async def _call_tool(name, arguments=None):
-        if name == "start_gemini_live_call":
+        if name == "start_live_ai_call":
             return {"ok": False, "error": "missing_api_key"}
         return {"ok": True}
 

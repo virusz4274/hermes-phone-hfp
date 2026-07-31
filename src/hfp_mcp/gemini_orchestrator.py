@@ -215,7 +215,8 @@ class GeminiMCPOrchestrator:
     ) -> None:
         while True:
             await self.run_once(timeout_seconds=poll_seconds)
-            status = await self.client.gemini_status()
+            status_fn = getattr(self.client, "live_status", None) or self.client.gemini_status
+            status = await status_fn()
             if not status.get("running"):
                 return
             await asyncio.sleep(sleep_seconds)
@@ -257,25 +258,50 @@ class HfpMCPGeminiClient:
         result = await self._session.call_tool(name, args or {})
         return _coerce_tool_result(name, result)
 
+    async def _call_tool_with_fallback(
+        self,
+        primary: str,
+        fallback: str,
+        args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = await self._call_tool(primary, args)
+        except Exception:
+            return await self._call_tool(fallback, args)
+        if _tool_missing(result):
+            return await self._call_tool(fallback, args)
+        return result
+
     async def poll_requests(self, timeout_seconds: float) -> list[dict[str, Any]]:
-        result = await self._call_tool(
+        result = await self._call_tool_with_fallback(
+            "poll_live_ai_requests",
             "poll_gemini_live_requests",
             {"timeout_seconds": timeout_seconds},
         )
         return list(result.get("requests") or [])
 
     async def pending_requests(self) -> list[dict[str, Any]]:
-        result = await self._call_tool("get_gemini_live_pending_requests")
+        result = await self._call_tool_with_fallback(
+            "get_live_ai_pending_requests",
+            "get_gemini_live_pending_requests",
+        )
         return list(result.get("requests") or [])
 
     async def submit_result(self, request_id: str, result: str) -> dict[str, Any]:
-        return await self._call_tool(
+        return await self._call_tool_with_fallback(
+            "submit_live_ai_result",
             "submit_gemini_live_result",
             {"request_id": request_id, "result": result},
         )
 
+    async def live_status(self) -> dict[str, Any]:
+        return await self._call_tool_with_fallback(
+            "get_live_ai_status",
+            "get_gemini_live_status",
+        )
+
     async def gemini_status(self) -> dict[str, Any]:
-        return await self._call_tool("get_gemini_live_status")
+        return await self.live_status()
 
 
 def _coerce_tool_result(name: str, result: Any) -> dict[str, Any]:
@@ -298,6 +324,13 @@ def _coerce_tool_result(name: str, result: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     return {"ok": False, "error": f"Tool {name} returned no structured content"}
+
+
+def _tool_missing(result: dict[str, Any]) -> bool:
+    if result.get("ok") is not False:
+        return False
+    error = str(result.get("error") or "").lower()
+    return "not found" in error or "unknown tool" in error
 
 
 def build_parser() -> argparse.ArgumentParser:

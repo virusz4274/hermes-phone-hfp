@@ -65,6 +65,15 @@ def test_gemini_tools_absent_when_disabled():
 
     assert "start_gemini_live_call" not in tools
     assert "get_gemini_live_status" not in tools
+    assert {
+        "get_capabilities",
+        "start_live_ai_call",
+        "get_live_ai_status",
+        "send_live_instruction",
+        "speak_to_caller",
+        "poll_live_ai_requests",
+        "get_call_transcript",
+    } <= tools
 
 
 def test_gemini_tools_absent_without_api_key():
@@ -85,6 +94,17 @@ def test_gemini_tools_present_when_enabled_configured_and_dependencies_exist(tmp
     )
 
     assert {
+        "start_live_ai_call",
+        "stop_live_ai_call",
+        "get_live_ai_status",
+        "send_live_ai_text",
+        "poll_live_ai_requests",
+        "get_live_ai_pending_requests",
+        "submit_live_ai_result",
+        "cancel_live_request",
+        "clear_live_requests",
+        "get_call_transcript",
+        "get_last_call_summary",
         "start_gemini_live_call",
         "stop_gemini_live_call",
         "get_gemini_live_status",
@@ -121,6 +141,8 @@ async def test_pending_gemini_requests_remain_visible_after_poll():
     assert second["requests"] == []
     assert pending["requests"] == [request.to_dict()]
     assert manager.status()["pending_requests"] == 1
+    assert manager.status()["queued_requests"] == 0
+    assert manager.status()["total_unresolved_requests"] == 1
 
 
 def test_gemini_function_declarations_include_generic_mcp_client_tools():
