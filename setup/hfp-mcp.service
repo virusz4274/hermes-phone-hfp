@@ -1,0 +1,38 @@
+[Unit]
+Description=HFP MCP Server (Bluetooth phone calling)
+Documentation=https://github.com/virusz4274/hermes-phone-hfp
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/hfp-mcp.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+# Create the private runtime directory before filesystem restrictions apply.
+RuntimeDirectory=hfp-mcp
+RuntimeDirectoryMode=0700
+
+# This service is the sole Bluetooth owner and uses streamable HTTP. A local
+# MCP client's stdio process proxies to this service; it does not replace it.
+ExecStart=__REPO_DIR__/.venv/bin/hfp-mcp-server --transport streamable-http $HFP_MCP_OPTS
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+WatchdogSec=0
+
+# Network transport: no stdio MCP channel, so stdin is unused.
+StandardInput=null
+
+# Contain the network-facing daemon while retaining D-Bus and Bluetooth socket
+# access. The service writes only its XDG runtime/state locations.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=-%h/.local/state/hfp-mcp -%t/hfp-mcp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target

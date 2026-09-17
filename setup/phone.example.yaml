@@ -1,0 +1,43 @@
+# First-time configuration: copy to ~/.config/hfp-mcp/config.yaml.
+# See docs/install.md. If config.yaml exists, merge only the phone section.
+# Replace example numbers; secrets belong in service environment files, not YAML.
+phone:
+  # Routing schema version, not the hfp-mcp package version.
+  version: 1
+  default_region: IN
+  auto_answer: true
+  auto_reconnect: false
+  max_phone_tasks: 2  # Includes tasks continuing after hangup; no queue.
+  background_task_minutes: 30  # Separate revocable run authorization.
+  endpoints:
+    personal:
+      # Existing Hermes profile and its API URL (not the HFP daemon's URL).
+      profile: default
+      url: http://127.0.0.1:8642
+      token_env: HFP_HERMES_API_KEY
+      bridge_token_env: HFP_HERMES_BRIDGE_KEY
+  policies:
+    admin:
+      # Allows this profile's tools; normal Hermes approvals still apply.
+      admin: true
+      # Opt in after configuring this profile's native Telegram home channel.
+      background_tasks: false
+      remember: true
+      max_minutes: 60
+  numbers:
+    # Cellular caller/destination number, NOT a Bluetooth MAC address.
+    # Replace this with your own calling number for the admin route.
+    "+919876543210":
+      endpoint: personal
+      policy: admin
+      voice: gemini_live  # Or classic for Hermes STT/TTS without Gemini.
+      # Save this caller's phone dialogue and continue a native Hermes task session.
+      # Active dialogue stays until new/clear; archived dialogue expires after 30 days.
+      continuity: true
+      # Optional after configuring Hermes STT/TTS:
+      # fallback: classic
+  # No default: unmatched/withheld callers are declined.
+  # For guests/known callers, add an existing restricted profile endpoint,
+  # its policy under policies, and a number route or an explicit default route.
+  # See docs/phone-routing.md#optional-guest-and-known-caller-profiles
+  # for the complete configuration. Do not use the admin policy as a default.

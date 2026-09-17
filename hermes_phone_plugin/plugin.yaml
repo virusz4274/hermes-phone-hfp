@@ -1,0 +1,4 @@
+name: hfp-phone
+version: "0.1.0rc1"
+description: "Caller-scoped phone context and permissions over the Hermes Runs API. Bluetooth and voice are owned by hfp-mcp."
+entry_point: __init__

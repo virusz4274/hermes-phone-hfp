@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hfp-mcp"
+version = "0.1.0rc1"
+description = "Virtual phone call assistant for Hermes Agent over Bluetooth HFP with Gemini Live"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.14"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Telephony",
+]
+dependencies = [
+    "starlette>=1.3.1,<2",
+    "httpx>=0.27,<1",
+    "PyYAML>=6.0,<7",
+    "phonenumbers>=9.0,<10",
+    "aiohttp>=3.9.0,<4",
+]
+# Call audio uses direct Bluetooth SCO sockets. The realtime sidecar uses
+# Starlette/uvicorn for binary WebSocket audio streaming.
+
+[project.optional-dependencies]
+# Only the Bluetooth-owning daemon needs native D-Bus/GLib bindings.
+# The Hermes plugin uses the portable base package.
+daemon = [
+    "mcp>=1.27.0,<2",
+    "uvicorn>=0.30.0,<1",
+    "dbus-python>=1.3.2",
+    "PyGObject>=3.42.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "httpx2>=2.0,<3",
+    "build>=1.2,<2",
+    "twine>=6,<7",
+]
+gemini-live = [
+    "google-genai>=2.16,<3",
+    "aiohttp>=3.9.0,<4",
+    "soxr>=0.5,<1",
+]
+
+[project.scripts]
+hfp-mcp = "hfp_mcp.diagnostics:main"
+hfp-mcp-server = "hfp_mcp.server:main"
+
+[project.urls]
+Repository = "https://github.com/virusz4274/hermes-phone-hfp"
+Documentation = "https://github.com/virusz4274/hermes-phone-hfp/tree/main/docs"
+Issues = "https://github.com/virusz4274/hermes-phone-hfp/issues"
+Changelog = "https://github.com/virusz4274/hermes-phone-hfp/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
+only-include = ["src", "hermes_phone_plugin", "setup", "docs", "tests", "scripts", "README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md", "pyproject.toml"]
+exclude = ["**/__pycache__", "**/*.pyc", "**/.env", "**/*.db", "**/*.sqlite3", "**/*.log"]
+
+[tool.hatch.build.targets.wheel]
+core-metadata-version = "2.4"
+packages = ["src/hfp_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

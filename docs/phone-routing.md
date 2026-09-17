@@ -1,0 +1,391 @@
+# Configuration and operations
+
+For a first installation, follow [Installation](install.md). This reference covers additional profiles and ongoing operation.
+
+## Services and configuration
+
+Run one `hfp-mcp` Bluetooth owner. Its in-process controller selects the caller's route, establishes an authenticated Hermes session binding, then starts Gemini Live or classic voice. The selected Hermes gateway owns agent execution.
+
+`phone.version: 1` in the daemon YAML enables routing. Without a `phone` section the daemon serves low-level MCP clients without an automatic phone assistant. Routes are loaded at service startup; active calls never change profile or permission policy in place.
+
+The daemon and phone plugin must read equivalent phone routing configuration. The Hermes installer selects the existing routing path or the default `~/.config/hfp-mcp/config.yaml` and writes `HFP_MCP_CONFIG` in both local environment files. Use its `--phone-config` option for a custom path. On separate hosts, keep the routing content equivalent and use the appropriate local path on each host. Keep secrets outside YAML.
+
+Each endpoint names an existing Hermes profile, API base URL, API-token environment variable, and a **different** phone-binding-token environment variable. Use random secrets of at least 32 characters. The bridge token is for daemon-to-plugin authorization and must not be exposed as an agent tool argument.
+
+For a default-profile endpoint:
+
+```dotenv
+# Daemon environment (~/.config/hfp-mcp.env)
+HFP_HERMES_API_KEY=<at-least-32-random-characters>
+HFP_HERMES_BRIDGE_KEY=<different-at-least-32-random-characters>
+HFP_GEMINI_API_KEY=<your-gemini-key-if-used>
+# HFP_MCP_CONFIG is populated by the installer.
+```
+
+```dotenv
+# Selected Hermes profile environment
+API_SERVER_ENABLED=true
+API_SERVER_KEY=<same-value-as-HFP_HERMES_API_KEY>
+HFP_HERMES_BRIDGE_KEY=<same-binding-secret-as-the-daemon>
+# HFP_MCP_CONFIG is populated by the installer.
+```
+
+Protect these files with mode 0600. An explicitly configured Gemini route enables the provider directly. Model/voice provider environment options remain supported.
+
+Install the new plugin into each participating existing Hermes home with `setup/install_hermes.py`. The `--python` argument selects Hermes's interpreter, not the HFP virtualenv. The selected interpreter must have pip available.
+
+Hermes's `api_server` toolset selection governs API sessions. For personal admin parity, configure that platform with the same toolsets you use in owner chat; the installer preserves existing model/tool configuration rather than silently widening it. Normal Hermes approval rules remain in effect.
+
+The client verifies native run submission, events, status, stop and approval support plus phone-plugin version/profile identity before answering. Missing capabilities, credentials or profiles end the call without substituting another profile.
+
+The main `phone` settings are:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `version` | Required | Set to `1` to enable the controller |
+| `default_region` | `IN` unless set in the service/Bluetooth configuration | Country used to normalize local phone numbers |
+| `auto_answer` | `true` | Answer incoming calls that have a valid route |
+| `auto_reconnect` | `false` | Retry the configured handset connection while disconnected |
+| `blocked` | `[]` | Numbers to decline even when a guest default is configured |
+| `default` | None | Optional restricted route for unmatched or withheld numbers |
+| Policy `admin` | `false` | Permit the selected profile's tools under its normal approval rules |
+| Policy `tools` | `[]` | Exact caller-aware tool names permitted for a restricted caller |
+| Policy `remember` | `true` | Allow persistent caller notes for presented numbers |
+| Policy `max_minutes` | `10` | Maximum call duration, from 1 to 240 minutes |
+| Route `voice` | `gemini_live` | Voice backend: `gemini_live` or `classic` |
+| Route `fallback` | None | Optional `classic` fallback if Gemini fails during startup |
+
+To validate a specific YAML file, pass `--config setup/phone.example.yaml` to `route validate` or `route explain`. Otherwise the commands select the YAML path from service configuration.
+
+## Optional guest and known-caller profiles
+
+Create or select a profile only when you need it. A single personal profile plus an explicit owner-number route is supported. Unmatched callers are declined unless a `phone.default` route is configured.
+
+For a shared receptionist profile, keep SOUL, skills and static context suitable for all of its callers. Configure:
+
+```yaml
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+  provider: none
+platform_toolsets:
+  api_server: [hfp_caller]
+mcp_servers: {}
+```
+
+The bridge rejects restricted calls into a profile with shared memory enabled, an unscoped external memory provider, broad API toolsets or raw MCP connections. Profiles isolate Hermes configuration/state; they are not OS sandboxes. Tools that execute arbitrary programs still have their OS account's privileges and must not be registered as restricted caller capabilities.
+
+Install the same plugin into that existing profile, using its home with `--home` (for example `~/.hermes/profiles/receptionist`). For a separate gateway, set `API_SERVER_ENABLED=true`, `API_SERVER_PORT=8643`, `API_SERVER_KEY` and `HFP_RECEPTION_BRIDGE_KEY` in that profile's `.env`. Set `HFP_MCP_CONFIG` to the shared routing file there too. Start it with `hermes -p receptionist gateway`.
+
+In the daemon environment, set `HFP_RECEPTION_API_KEY` to that gateway's API key and `HFP_RECEPTION_BRIDGE_KEY` to its separate binding secret. Add the endpoint and policy to the phone YAML:
+
+```yaml
+# Inside phone:
+endpoints:
+  receptionist:
+    profile: receptionist
+    url: http://127.0.0.1:8643
+    token_env: HFP_RECEPTION_API_KEY
+    bridge_token_env: HFP_RECEPTION_BRIDGE_KEY
+policies:
+  receptionist:
+    tools: [hfp_caller_read, hfp_caller_update]
+    remember: true
+    max_minutes: 10
+numbers:
+  "+919876543211":
+    endpoint: receptionist
+    policy: receptionist
+    voice: gemini_live
+# Optional catch-all, only after the endpoint/profile is ready:
+default:
+  endpoint: receptionist
+  policy: receptionist
+  voice: gemini_live
+```
+
+These are merge fragments, not complete configurations; preserve your other policies and endpoints. No automatic contact-book import grants access. Duplicate normalized routes, blocked-and-routed numbers, unknown policy references and admin catch-all routes are errors.
+
+The controller gives missing caller-ID data up to two seconds to arrive before route selection. Once bound, a different presented number ends the call; it never upgrades an existing conversation. Admin selection uses exact number matching, as configured, and leaves action approvals enabled.
+
+## Caller memory
+
+Every call gets an unpredictable `hfp-…` context binding. Each delegated request gets separate execution authority, so cancellation cannot reuse the next request's lease. A stable HMAC-derived caller ID identifies notes independently of the physical call. Notes live in `<Hermes home>/hfp-phone/callers.sqlite3`; its adjacent key file must be backed up with the database to preserve identity mappings. With continuity disabled, requests retain the earlier separate-session behavior and six-exchange in-call history.
+
+### Conversation continuity
+
+Set `continuity: true` on each number route that should keep its phone conversation
+(the default for omitted settings is `false`). This explicitly enables text storage
+for that route even if general full-transcript reporting is disabled. Gemini input
+and output transcription must both remain enabled. No historical test calls are
+imported when enabling the feature.
+
+The daemon stores finalized spoken dialogue once in its existing `calls.db`, linked
+to a conversation and its physical calls. The same caller and Hermes profile resume
+that conversation across reconnects and restarts. Active dialogue is retained until
+reset; archived dialogue is retained for 30 days. Withheld callers and routes with
+`remember: false` do not resume or recall another call's conversation.
+
+Gemini starts with up to 40 recent messages, bounded to 24,000 text characters.
+`phone_recall` retrieves older retained exchanges, with bounded response pages.
+Very long messages expose an offset for reading the rest, including multilingual
+text. Hermes receives server-selected
+phone context with each task and can use `hfp_caller_recall` to retrieve more; add
+that exact capability to a restricted policy if it needs it. Retrieved text is
+caller-scoped data, never a grant of permissions. Generated audio is not proof that
+the caller heard every word. There is no extra summarizer or dialogue mirror in
+Hermes: Hermes stores its native task history and performs its own compaction.
+
+Gemini voice controls:
+
+| Request | Behavior |
+|---|---|
+| New chat / clear chat | Confirm in a subsequent spoken reply within 60 seconds; archive the old conversation and select fresh phone and Hermes sessions. |
+| Delete my phone history | Separately confirm; remove this caller's retained phone dialogue and linked managed Hermes sessions. Saved caller facts remain separate. |
+| Compact this conversation | Use native Hermes task-context compaction in the background, preserve phone dialogue, and refresh the voice context on completion. Wait for active work to finish first. |
+| What did we discuss earlier? | Search/read this caller's retained dialogue, optionally including archived phone chats. |
+| Actually, make that tomorrow | Steer the current native Hermes task; acceptance does not guarantee the correction was applied before it finished. |
+| Stop that task | Revoke its authority and request native cancellation; already completed external actions cannot be undone. |
+
+Resetting refreshes the Gemini connection while keeping the Bluetooth call alive.
+Late messages from the old voice generation and old tasks are excluded. A failed
+cross-system deletion reports incomplete cleanup and preserves references for a
+later explicit retry; it must not claim all history was erased.
+
+Continuity keeps a primary native Hermes task session per conversation, creates extra
+sessions lazily for independent overlap, and uses a fresh binding
+for every run. The plugin records the immutable run-to-binding association before
+native execution; a later call cannot renew an earlier run's authority. The small
+session adapter uses native Hermes creation, deletion, and compression machinery.
+Native compression can keep the original task history when a summary would make
+it larger. Cancelling the wait for compaction cannot undo native compression
+already in progress; its result cannot refresh a reset or ended call.
+Classic STT/TTS also uses persistent task history and recent phone context, while
+the background conversational flow and the voice-control tools above use Gemini.
+
+`hfp_caller_read` and `hfp_caller_update` operate only on the caller bound to the current session. They do not accept another phone number or profile. Notes are bounded to 8,000 characters and retained until forgotten. The model is told that notes are untrusted facts, not instructions. Gemini delegates lasting caller facts/preferences to Hermes for retention; the audio session itself is not a memory store.
+
+Withheld callers receive separate ephemeral identities and cannot save persistent notes. `remember: false` also disables persistence. Receptionist profiles must not copy caller details into global MEMORY.md, USER.md, or a shared external memory provider.
+
+```bash
+hfp-mcp caller inspect --profile default --number +919876543210
+hfp-mcp caller forget --profile default --number +919876543210
+# Use --store /absolute/path/callers.sqlite3 for a remote/copied or custom-home store.
+```
+
+Forgetting notes does not delete Hermes session history or downstream calendar records. Manage those through their owning system. Raw audio recording is off; daemon diagnostic retention remains 30 days. Hermes session retention is configured independently in Hermes.
+
+Bindings expire after ten seconds unless renewed every two seconds. A lost renewal ends the call; expiry prevents later caller-tool access. Hangup revokes the binding before stopping Hermes work. Hermes stop is cooperative and cannot undo an external operation already committed. External integration handlers must call `binding["check_active"]()` immediately before a write and provide their own operation-level idempotency.
+
+## Full call transcripts and timing
+
+Set `HFP_FULL_TRANSCRIPTS=true` in the daemon's private environment file and
+restart `hfp-mcp.service` while no call is active. For Gemini, leave both
+`HFP_GEMINI_INPUT_TRANSCRIPTION` and `HFP_GEMINI_OUTPUT_TRANSCRIPTION` enabled
+(their default). Classic voice saves Hermes STT input and generated TTS text.
+This records text, not raw audio. Recognition can contain errors; an output
+transcript describes generated speech, which may have been interrupted before
+the caller heard all of it.
+
+Opted-in transcript events are saved as turns arrive in the private
+`~/.local/state/hfp-mcp/calls.db`, or the configured daemon database. They survive
+daemon restarts and the bounded in-memory display history. They expire under
+`HFP_RETENTION_DAYS` (30 by default); disabling transcripts stops capture and
+blocks API access but does not immediately delete previously saved records.
+Enabling now cannot recover text redacted during earlier calls.
+
+From the repository root:
+
+```bash
+.venv/bin/hfp-mcp transcript list
+.venv/bin/hfp-mcp transcript show                         # latest retained call
+.venv/bin/hfp-mcp transcript show --call-id <call-id>
+.venv/bin/hfp-mcp transcript show --call-id <call-id> --output ~/call-transcript.json
+```
+
+Exports contain all pages and use private mode 0600; existing output files are
+not overwritten. Owner Hermes chats can use `hfp_phone_transcripts` to list/read
+calls. Authenticated MCP clients have `list_call_transcripts` and
+`get_call_transcript(session_id, after_id, limit)`; follow `next_after_id` while
+`has_more` is true. The corresponding authenticated HTTP endpoints are
+`/v1/phone/transcripts/calls` and `/v1/phone/transcripts?call_id=…&after_id=…`.
+Transcript tools are owner controls, not restricted caller capabilities.
+
+Gemini's `phone_status` tool checks the current authenticated Hermes endpoint
+without launching a model run. Action requests still use Hermes and preserve
+its normal approvals. Status and hangup remain available during a pending task.
+A cancelled request releases its admission slot, but the controller waits for
+its authority cleanup before executing the next task. An additional task while
+one is still pending receives a busy response; it is not queued or executed.
+A status-check timeout does not establish a permission failure or task outcome.
+The voice prompt requires the actual function call in the same response, with an
+optional brief acknowledgement; it cannot guarantee speech while a synchronous
+tool is running.
+`phone_timing` audit records capture setup and Hermes request timings, including
+cancellation outcomes. `voice_metrics` records and `get_live_ai_status` expose
+first provider/input/output audio timings. Caller bindings retain their ten-second
+expiry. Heartbeats tolerate temporary gateway delays only within the last confirmed
+lease (with a half-second safety margin); rejection or failure to renew before
+that deadline stops the call. A single three-second delay no longer triggers a hangup.
+Sending audio to HFP is not an exact
+measurement of when the handset plays it. No tool prompts or transcript text
+are included in timing records.
+
+The voice prompt distinguishes fictional role-play from real actions and requires
+actual function calls, rather than speaking function names or arguments. The
+`ask_hermes` handoff forwards both the task and its optional conversation context
+(up to 8,000 characters) as caller data, preserving language and constraints.
+Hermes does not automatically hear the whole call. With continuity enabled, the
+plugin restores bounded recent dialogue and supplies context for tasks. Neither context nor
+a spoken claim changes the route's permissions or supplies an approval.
+
+The call's initial context describes the access configured by its route. Admin
+calls can request the selected Hermes profile's available host-system tools under
+its existing approval rules; restricted callers retain their explicit capability
+limits. RAM/CPU, Docker, ping, and package requests refer to the Hermes host unless
+the caller specifies another system. Testing the assistant does not imply fiction.
+Only caller-established pretend scenarios should be described as fictional in a
+handoff, including when the conversation is in Malayalam or another language.
+
+Without continuity, Gemini cancellation of a pending function revokes that request's
+binding and stops its Hermes run. With continuity, a task is owned independently
+of the initial Gemini function response: submission returns promptly, reporting
+whether admission is still pending or confirmed, and completion is delivered as a
+separate task update. Ordinary interruptions stop speech without cancelling the
+task. Hangup stops call-bound work; authorized continued work retains its separate
+bounded grant. Explicit cancellation, confirmed reset, or expiry stops selected work.
+`phone.max_phone_tasks` defaults to two simultaneous tasks, including continued work across gateways on this host (atomic slots in the existing daemon ledger),
+with native status, steering, and stop controls and no custom task queue. Neither mode silently replays actions or treats cancellation
+as successful completion. The prompt changes
+reduce unnecessary handoffs and misleading claims, but cannot guarantee model
+compliance or eliminate recognition errors and provider interruptions.
+
+## Natural task handling
+
+`ask_hermes` infers `relationship`, an optional original `task_id`, and
+`continue_after_call` from the conversation. Ordinary and long requests use the
+primary session when free. A clearly independent overlapping request may use a
+second session; follow-ups and corrections stay with their original session.
+Ambiguous/conflicting requests need clarification. Status questions never submit
+work. At capacity, offer cancellation/replacement; nothing is queued. Replacement
+first stops the selected run, then checks it has settled before new submission.
+
+To enable continuation for a known admin caller, set its policy's
+`background_tasks: true`. Configure that Hermes profile's existing Telegram home
+channel first. `phone.background_task_minutes` defaults to 30 minutes, measured
+from designation to continue, and is not extended by later calls or status checks.
+Normal Hermes approvals remain in force. Substantial work can be designated from
+ordinary wording; no special background phrase or confirmation ritual is needed.
+The tool response must confirm the designation before voice promises Telegram.
+Use `hermes_task continue` to designate an already running task.
+
+The existing gateway observes native Runs and persists task IDs, session IDs,
+status, results and per-run grants in its existing caller database. After restart
+it looks up recorded native run IDs; interrupted or uncertain work is reported,
+never resubmitted. Completed outcomes remain queryable on callbacks, even when
+their spoken announcement was interrupted. Voice announcements wait for a pause.
+Owner `hfp_phone_status` and exact-request `hfp_phone_approval` also cover continued
+work while no call is connected.
+
+Telegram uses Hermes's existing messaging helper for a concise labeled completion
+notice. Requested attachments use native `hermes send --to telegram` with
+`MEDIA:/absolute/path`; `[[as_document]]` is available when a document is requested.
+Keep the requested file count and format. A timeout means delivery is uncertain:
+no test message, custom code/transport fallback, or automatic duplicate follows.
+A notice attempt is recorded before sending, so a gateway crash cannot trigger
+an automatic resend. Callback status shows whether delivery was confirmed.
+
+New/clear confirmation explicitly includes cancellation of unfinished work,
+including continued tasks. Delete removes all linked managed native sessions,
+including additional task sessions. Reset receipts in refreshed voice context
+prevent a question about the new chat from being treated as another reset.
+Saved caller facts remain separate. Explicit physical-call hangup uses the
+idempotent phone operation. A conservative finalized-transcript fallback recognizes
+literal commands and excludes quoted, negated, hypothetical and fictional speech;
+Gemini remains responsible for interpreting other natural wording.
+
+## Calls and approvals
+
+In owner chat, request a call to an explicit number; the plugin provides `hfp_phone_start_call(number)`. It reports success after the interactive voice path is ready. For outbound calls, the **destination number** selects the route and permissions. Add an explicit destination route, or a restricted default, before dialing. Never map every destination to your admin profile.
+
+Inbound calls use the presented caller number. `auto_answer: false` leaves permitted incoming calls unanswered until answered through phone control. Once active, the controller attaches the selected voice backend. It still declines calls without a permitted route.
+
+Check pending actions and resolve one exact approval request from the repository root:
+
+```bash
+.venv/bin/hfp-mcp phone status
+.venv/bin/hfp-mcp phone approve --request-id <pending-request-id>
+# Or deny that request:
+.venv/bin/hfp-mcp phone deny --request-id <pending-request-id>
+```
+
+Use the request ID shown in status, not the call ID or run ID. The owner-chat `hfp_phone_approval` tool provides the same operation. Gemini does not grant approval. A rejected, cancelled or uncertain action must not be described as completed.
+
+For commands shown as `hfp-mcp` elsewhere in this reference, activate the repository virtualenv (`source .venv/bin/activate`) or use `.venv/bin/hfp-mcp` explicitly.
+
+## Integrations
+
+Future booking, CRM or message-intake integrations can register restricted capabilities through:
+
+```python
+from hfp_mcp.hermes_bridge import register_caller_capability
+
+register_caller_capability(
+    ctx,
+    name="appointments_for_caller",
+    schema={
+        "description": "List appointments owned by the current caller.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    handler=lambda binding, args: appointment_store.for_caller(
+        profile=binding["profile"], caller_id=binding["caller_id"]
+    ),
+)
+```
+
+Register from a Hermes plugin loaded in the receiving profile. Add the exact tool name to the phone policy. The capability belongs to `hfp_caller`; newly installed tools are denied until explicitly added. Handlers must return a Hermes-compatible result (JSON string or dictionary), enforce ownership using the supplied binding and never trust a model-supplied resource owner. Namespaced suffix matching and wildcards are not supported.
+
+No calendar backend or business workflow is bundled. Owner sessions can continue using their existing unrestricted Hermes integrations under normal approval rules.
+
+## Multiple gateways
+
+Separate profile gateway processes are the default. Give each endpoint its existing API URL and separate credentials. Only the HFP daemon owns Bluetooth.
+
+For an already-enabled Hermes multiplexer, use `http://127.0.0.1:8642/p/<profile>` for named endpoints. Install the plugin in the default home and each receiving profile. The default plugin registers explicit mirrors for its custom binding/speech routes; Hermes supplies the native Runs routes. Named-profile requests use their own API and bridge credentials. Do not enable a second API listener for profiles served by the multiplexer. This installer never enables multiplexing.
+
+Use HTTPS or an SSH tunnel between hosts. The router rejects plaintext non-loopback HTTP endpoints. Keep profile data and speech-provider credentials on the Hermes host. For owner controls from a different host/user, set `HFP_MCP_DAEMON_URL` to the authenticated daemon's `/mcp` URL and `HFP_MCP_BEARER_TOKEN` to its control token in a private HFP environment file on the Hermes host (the default is `~/.config/hfp-mcp.env`; override with `HFP_MCP_ENV_FILE`). Copy the phone routing YAML there and set `HFP_MCP_CONFIG` accordingly. The Gemini key is needed only on the daemon host; STT/TTS providers and `ffmpeg` are needed on the Hermes host.
+
+## Reinstalling and removing the plugin
+
+Rerun the plugin installer to install the current checkout. It stages the new files first, backs up the existing plugin and Hermes YAML under `<Hermes home>/hfp-phone-backups/<timestamp>/`, and installs one `hfp-phone` plugin. Obsolete awareness plugins and old discoverable phone-plugin backups are moved into that backup directory. Existing adapter-specific plugin settings are cleared; other plugins, model settings and caller notes are preserved.
+
+Restart the selected Hermes gateway after installation. No gateway restart is performed by the plugin installer.
+
+To remove phone assistance, stop the HFP daemon between calls, disable `hfp-phone` in the selected Hermes profile, and remove the `phone` section from the HFP YAML. Start the daemon again if you still need low-level MCP calling. Caller notes are retained under `<Hermes home>/hfp-phone/`; delete them separately only if you want to erase that data. The daemon's authenticated MCP tools remain independently usable.
+
+For the complete update policy, backup locations and full manual uninstall procedure, see [Maintenance](maintenance.md).
+
+## Hardware acceptance
+
+Run these on the actual phone/controller before unattended use:
+
+- Incoming owner call: correct personal profile, usable two-way audio, normal pending approval and exact-request resolution from owner chat/CLI.
+- Known caller: correct restricted profile; notes survive a second call; another caller cannot read them.
+- Unmatched/withheld caller: declined without a default, or routed to the configured guest profile.
+- Speech interruption: playback clears; stopped/failed work is not reported as completed.
+- Outbound interactive call: success only after voice readiness. One-shot announcement: no later AI attachment.
+- Remote hangup, daemon restart, gateway outage and Gemini reconnect: audio lease released, caller authority revoked/expired, no repeated external action.
+- Both voice backends: measure answer-to-audio readiness, end-of-speech-to-first-reply latency and intelligibility on the same sample calls. No latency improvement is claimed without those measurements.
+- Continuity: share a detail in ordinary conversation, hang up, call back and ask
+  about it. Repeat after a daemon restart. A different number/profile must not
+  receive it; withheld callers must start fresh.
+- During a Hermes task, keep chatting, give a correction and check its actual
+  result. Try explicit cancellation and call-bound hangup; neither may produce a late
+  success announcement in a later call or new chat.
+- Say “new chat,” confirm in the next reply, and continue without hanging up.
+  Old details should require explicit archived recall. Test explicit phone-history
+  deletion on disposable dialogue and verify saved caller facts stay separate.
+- Compact a task history and continue speaking while it runs. Check that retained
+  phone dialogue remains accessible after the voice context refresh.
+
+Relevant upstream references: [Hermes Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server), [profiles](https://hermes-agent.nousresearch.com/docs/user-guide/profiles), [plugin APIs](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins), [voice](https://hermes-agent.nousresearch.com/docs/user-guide/features/voice-mode), [Gemini Live tools](https://ai.google.dev/gemini-api/docs/live-api/tools).
