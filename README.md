@@ -50,9 +50,16 @@ Hermes Phone cleanly separates concerns across four layers:
 ### 1. Owner Phone Controls (`hfp_phone` toolset)
 Available in your Hermes owner chat channels (e.g. Telegram, Discord, CLI) to control telephone operations:
 - `hfp_phone_start_call`: Initiate an outbound phone call through the paired handset to a specified number.
+- `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first for remembered facts and call summaries; consult transcripts when notes are insufficient or exact dialogue is requested.
 - `hfp_phone_status`: Inspect live Bluetooth connection, active call state, and routing status.
 - `hfp_phone_transcripts`: List past phone calls or read detailed transcripts when full transcript retention is enabled.
 - `hfp_phone_approval`: Explicitly approve (`once`) or deny (`deny`) pending tool execution requests prompted by in-call tasks.
+
+New outgoing destinations do not need a number route. With one configured Hermes
+endpoint they receive Gemini conversation and per-number notes automatically;
+incoming access and private tool permissions still require their own configured
+route. Existing number routes retain their permissions. See
+[outgoing calls](docs/phone-routing.md#outgoing-calls-with-a-purpose) for details.
 
 ### 2. Caller Context & Memory Tools (`hfp_caller` toolset)
 Provided to Hermes during a call to interact with caller-specific data without leaking cross-caller information:

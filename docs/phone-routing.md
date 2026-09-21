@@ -61,7 +61,21 @@ To validate a specific YAML file, pass `--config setup/phone.example.yaml` to `r
 
 Create or select a profile only when you need it. A single personal profile plus an explicit owner-number route is supported. Unmatched callers are declined unless a `phone.default` route is configured.
 
-For a shared receptionist profile, keep SOUL, skills and static context suitable for all of its callers. Configure:
+The Hermes profile named `default` and routing's `phone.default` are different:
+the first is your personal assistant; the second is the catch-all for unmatched
+phone numbers. Keep your owner-number entries and personal endpoint. Point the
+catch-all at a separate restricted profile.
+
+Create a fresh guest profile without copying owner memory, skills, channels, or
+credentials:
+
+```bash
+hermes profile create guest --no-skills
+```
+
+Configure its model/provider credentials as needed. Keep SOUL and static context
+suitable for every guest. Merge the following into
+`~/.hermes/profiles/guest/config.yaml`:
 
 ```yaml
 memory:
@@ -75,40 +89,197 @@ mcp_servers: {}
 
 The bridge rejects restricted calls into a profile with shared memory enabled, an unscoped external memory provider, broad API toolsets or raw MCP connections. Profiles isolate Hermes configuration/state; they are not OS sandboxes. Tools that execute arbitrary programs still have their OS account's privileges and must not be registered as restricted caller capabilities.
 
-Install the same plugin into that existing profile, using its home with `--home` (for example `~/.hermes/profiles/receptionist`). For a separate gateway, set `API_SERVER_ENABLED=true`, `API_SERVER_PORT=8643`, `API_SERVER_KEY` and `HFP_RECEPTION_BRIDGE_KEY` in that profile's `.env`. Set `HFP_MCP_CONFIG` to the shared routing file there too. Start it with `hermes -p receptionist gateway`.
+Install the same plugin into the guest profile, from this repository:
 
-In the daemon environment, set `HFP_RECEPTION_API_KEY` to that gateway's API key and `HFP_RECEPTION_BRIDGE_KEY` to its separate binding secret. Add the endpoint and policy to the phone YAML:
+```bash
+python3 setup/install_hermes.py \
+  --home ~/.hermes/profiles/guest \
+  --python ~/.hermes/hermes-agent/venv/bin/python
+```
+
+For a separate gateway, add these to `~/.hermes/profiles/guest/.env`. Generate two
+different random secrets of at least 32 characters; the bracketed values below
+are placeholders, not literal credentials. Do not copy your entire personal `.env`.
+
+```dotenv
+API_SERVER_ENABLED=true
+API_SERVER_PORT=8643
+API_SERVER_KEY=<guest-api-secret>
+HFP_GUEST_BRIDGE_KEY=<guest-binding-secret>
+HFP_MCP_CONFIG=/absolute/path/to/.config/hfp-mcp/config.yaml
+```
+
+Use the same shared routing path as the daemon. In `~/.config/hfp-mcp.env`, add:
+
+```dotenv
+HFP_GUEST_API_KEY=<same-guest-api-secret>
+HFP_GUEST_BRIDGE_KEY=<same-guest-binding-secret>
+```
+
+Keep both environment files at mode 0600. Merge the endpoint, policy and catch-all
+into the existing `phone` section of `~/.config/hfp-mcp/config.yaml`:
 
 ```yaml
 # Inside phone:
 endpoints:
-  receptionist:
-    profile: receptionist
+  guest:
+    profile: guest
     url: http://127.0.0.1:8643
-    token_env: HFP_RECEPTION_API_KEY
-    bridge_token_env: HFP_RECEPTION_BRIDGE_KEY
+    token_env: HFP_GUEST_API_KEY
+    bridge_token_env: HFP_GUEST_BRIDGE_KEY
 policies:
-  receptionist:
+  guest:
+    admin: false
     tools: [hfp_caller_read, hfp_caller_update]
     remember: true
     max_minutes: 10
-numbers:
-  "+919876543211":
-    endpoint: receptionist
-    policy: receptionist
-    voice: gemini_live
 # Optional catch-all, only after the endpoint/profile is ready:
 default:
-  endpoint: receptionist
-  policy: receptionist
+  endpoint: guest
+  policy: guest
   voice: gemini_live
 ```
 
 These are merge fragments, not complete configurations; preserve your other policies and endpoints. No automatic contact-book import grants access. Duplicate normalized routes, blocked-and-routed numbers, unknown policy references and admin catch-all routes are errors.
 
+Validate with `hfp-mcp route validate`. Start the separate gateway with
+`hermes -p guest gateway` (or install/start its profile-specific gateway service
+for persistence). Restart the existing Hermes gateway and HFP daemon when calls
+and phone tasks are idle so all processes load the same routing configuration.
+Check `hfp-mcp phone status` for endpoint readiness before testing an actual call.
+Use `hfp-mcp route explain NUMBER` and `hfp-mcp route explain NUMBER --outgoing`
+to inspect the selected route without dialing.
+
+The result in either direction is:
+
+| Destination | Incoming call | Owner-requested outgoing call |
+| --- | --- | --- |
+| Blocked number | Declined | Rejected |
+| Exact entry in `phone.numbers` | That entry's profile and policy | The same entry's profile and policy |
+| Unmatched number with guest `phone.default` | Guest profile and policy | Guest profile and policy |
+| Unmatched number without `phone.default` | Declined | Notes-only outgoing fallback, if its endpoint can be selected |
+
+The owner supplies the outgoing objective, but the recipient's route determines
+permissions. `outbound_endpoint` only selects the last-resort notes-only route;
+it never overrides a matching number or guest default. The guest policy above
+permits conversation and each caller's own notes. Calendar bookings require an
+explicitly enabled caller-aware capability that enforces which resources that
+caller may access. Adding a trusted contact does not require `admin: true`;
+prefer an exact route with only the capabilities that contact needs.
+
+Notes are scoped by both profile and number. Changing an existing recipient's
+route from the personal outgoing fallback to guest does not migrate their old
+notes automatically. Never copy the owner's shared memory into the guest profile.
+
+### Permissions and prompt injection
+
+Caller speech, notes and retained dialogue are untrusted input. The gateway
+recomputes the route and binds its policy before agent execution; tool hooks and
+guarded phone-tool handlers enforce that policy. A spoken claim to be the owner,
+a forged policy in a tool argument, or instructions saved in notes cannot change
+the binding. Restricted guests cannot invoke owner dialing, approval, transcript,
+or arbitrary-number note controls. Expired or revoked authority stays invalid.
+
+This limits the effects of prompt injection; it does not make model responses or
+saved notes immune to manipulation. Treat notes read back into owner chat as
+untrusted facts, never authorization for a new call or action. Caller ID itself is
+not authentication: an exact admin number route grants broad access based on the
+presented number. Keep normal approvals enabled; use restricted policies when
+caller ID alone is insufficient. See [Security](../SECURITY.md).
+
 The controller gives missing caller-ID data up to two seconds to arrive before route selection. Once bound, a different presented number ends the call; it never upgrades an existing conversation. Admin selection uses exact number matching, as configured, and leaves action approvals enabled.
 
 ## Caller memory
+
+### Outgoing calls with a purpose
+
+Owner-requested outgoing calls do not require a destination entry in `phone.numbers`.
+Those entries identify known callers and their permissions. Existing number/default
+routes still take precedence, and blocked numbers remain blocked in both directions.
+With one Hermes endpoint, a new outgoing destination automatically uses that endpoint
+for Gemini conversation and its own persistent notes. With multiple endpoints, set
+`phone.outbound_endpoint` once to the endpoint that should own those notes; individual
+destinations still need no configuration. `outbound_notes` is a reserved internal policy.
+
+The automatic route exposes only `phone_notes`, `phone_status`, and `end_call` to
+Gemini. The gateway reads/writes the recipient's notes directly; it does not run an
+agent with the personal profile's global memory or tools. This route supports
+conversation, reminders, and recording agreed meeting details, but cannot execute
+calendar bookings or other external actions. Those need a configured route with
+the corresponding caller-aware capabilities. Notes persist across calls; full
+dialogue continuity remains an explicit route setting. Calling a new number does
+not add an incoming route or grant it owner access. Register additional numbers you
+own explicitly if they should have your existing personal-assistant permissions.
+
+Only a matching owner-admitted dialing attempt can select the automatic outgoing
+route; an unrelated incoming call or manually dialed call cannot claim it. Inspect
+the distinction with `hfp-mcp route explain +… --outgoing` versus the same command
+without `--outgoing`.
+
+Ask Hermes naturally: “Call Arun at +… on my behalf, ask how his day was, and
+arrange a meeting tomorrow afternoon.” Hermes should call `hfp_phone_start_call`
+with the number and a `purpose` containing all requested objectives and relevant
+details from your chat. Gemini receives that brief, the recipient's saved notes,
+and previous phone dialogue when continuity is enabled. It cannot see your full
+owner chat. It waits for the recipient to speak, introduces itself, and follows
+the brief. Names, relationships, and previous conversations are used only when
+supplied or remembered, never invented.
+
+The optional `purpose` is text of at most 4,000 characters. The HTTP equivalent is
+`POST /v1/phone/calls` with `number`, `request_id`, and `purpose`; MCP clients use
+`start_phone_call(number, request_id, purpose="")`. Number-only calls remain valid.
+The brief belongs to the exact outgoing call and survives voice reconnects and
+conversation refreshes. It is not automatically saved as a lasting caller fact.
+Reusing a completed request ID returns its original result; changed arguments
+are rejected. A successful start means the voice backend is ready, not that the
+conversation or a booking has finished. Never automatically redial after an
+uncertain or failed attempt.
+
+Gemini delegates real actions such as calendar lookups and meeting bookings to
+Hermes's configured tools, retaining the route's permissions and normal approvals.
+It reports completion only after the tool confirms it. Useful durable facts and
+preferences are saved through Hermes during the conversation when memory is enabled.
+Existing facts should be preserved when updating notes; a failed save must not be
+reported as remembered.
+
+For “call me to remind me about my meeting,” use the configured owner destination
+and include the meeting title, time/timezone, and relevant details in the brief.
+For a future reminder, use Hermes's existing scheduler: its job must retain the
+destination and a self-contained brief, then invoke the same outgoing tool when
+due. Scheduling and calendar integrations remain Hermes capabilities; this plugin
+does not add a scheduler or automatically monitor calendars. The destination must
+differ from the paired handset's own SIM number, which remains blocked from
+self-calling. Cached incoming greetings are separate from this workflow.
+
+### Notes from owner chat
+
+Hermes should read the relevant number's saved notes first when asked about a
+person or what was discussed on a call. If those notes answer the question, no
+transcript lookup is needed. Read retained dialogue for missing, stale or
+conflicting details, a specific call not adequately covered by notes, or a request
+for exact wording/full dialogue. Notes can accumulate facts across calls; they
+are not necessarily a complete summary of the latest call. This order is model
+tool guidance, not a server-enforced restriction on transcript access.
+
+Reading notes does not save anything. Report existing details as already saved;
+claim a new save only after an update succeeds.
+
+`hfp_phone_caller_read(number)` reads a recipient's saved facts without a call.
+`hfp_phone_caller_update(number, notes)` replaces them; read first and merge useful
+existing facts before updating. Both belong to the `hfp_phone` toolset. The daemon
+normalizes the number and selects its configured route and Hermes profile. No
+profile override is accepted. Results include `number`, `profile`, `persistent`,
+and `notes`. These tools are unavailable to phone-bound sessions, including admin
+phone sessions; those use the caller-scoped tools below.
+
+Authenticated owner HTTP clients can use `POST /v1/phone/caller-notes/read` with
+`number`, or `/v1/phone/caller-notes/update` with `number` and `notes`. Notes remain
+bounded to 8,000 characters. New destinations use the outgoing endpoint; blocked
+numbers and ambiguous endpoint selection are rejected. With `remember: false`,
+reads return empty notes and updates are rejected. These operations use the same
+gateway database and identity key as active calls, including remote profiles.
+Owner updates appear when the next call binds; in-call updates can be read from
+owner chat afterward. Gemini can ask Hermes to retrieve newer notes during a call.
 
 Every call gets an unpredictable `hfp-…` context binding. Each delegated request gets separate execution authority, so cancellation cannot reuse the next request's lease. A stable HMAC-derived caller ID identifies notes independently of the physical call. Notes live in `<Hermes home>/hfp-phone/callers.sqlite3`; its adjacent key file must be backed up with the database to preserve identity mappings. With continuity disabled, requests retain the earlier separate-session behavior and six-exchange in-call history.
 

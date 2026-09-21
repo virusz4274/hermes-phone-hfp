@@ -12,6 +12,7 @@ from .contracts import normalize_phone_number
 from .settings import _load_yaml, service_environment
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+OUTBOUND_NOTES_POLICY = "outbound_notes"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class Policy:
     remember: bool = True
     max_minutes: int = 10
     background_tasks: bool = False
+    notes_only: bool = False
 
     def allows(self, name: str) -> bool:
         return self.admin or name in self.tools
@@ -64,6 +66,7 @@ class RoutingConfig:
     auto_reconnect: bool = False
     max_phone_tasks: int = 2
     background_task_minutes: int = 30
+    outbound: Route | None = None
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RoutingConfig":
@@ -124,6 +127,8 @@ class RoutingConfig:
             endpoints[name] = endpoint
         policies = {}
         for name, value in data.get("policies", {}).items():
+            if name == OUTBOUND_NOTES_POLICY:
+                raise ValueError("outbound_notes is a reserved policy")
             if not _NAME.fullmatch(name) or not isinstance(value, dict):
                 raise ValueError("invalid policy")
             tools = value.get("tools", [])
@@ -177,6 +182,16 @@ class RoutingConfig:
             raise ValueError("max_phone_tasks must be 1..8 and background_task_minutes 1..240")
         if any(p.background_tasks and not p.admin for p in policies.values()):
             raise ValueError("background_tasks requires an admin policy")
+        # The automatic outbound route never runs a personal-profile agent.
+        # It uses Gemini and the gateway's binding-scoped notes API only.
+        policies[OUTBOUND_NOTES_POLICY] = Policy(
+            tools=frozenset({"hfp_caller_read", "hfp_caller_update"}), notes_only=True)
+        outbound_endpoint = data.get("outbound_endpoint")
+        if outbound_endpoint is None and len(endpoints) == 1:
+            outbound_endpoint = next(iter(endpoints))
+        if outbound_endpoint is not None and outbound_endpoint not in endpoints:
+            raise ValueError("outbound_endpoint references an undefined endpoint")
+        outbound = Route(outbound_endpoint, OUTBOUND_NOTES_POLICY) if outbound_endpoint else None
         return cls(
             True,
             region,
@@ -187,8 +202,18 @@ class RoutingConfig:
             blocked,
             boolean(data.get("auto_answer"), True),
             boolean(data.get("auto_reconnect"), False),
-            max_tasks, background_minutes,
+            max_tasks, background_minutes, outbound,
         )
+
+    def resolve_outbound(self, number: str) -> tuple[Route | None, str]:
+        """Select an owner-requested destination without granting incoming access."""
+        if not isinstance(number, str):
+            raise ValueError("outgoing number must be text")
+        normalized = normalize_phone_number(number, self.region)
+        selected, reason = self.resolve(normalized)
+        if selected or reason in {"blocked", "routing_disabled"}:
+            return selected, reason
+        return (self.outbound, "outbound_notes") if self.outbound else (None, "outbound_endpoint_required")
 
     def resolve(
         self, number: str | None, *, presented: bool = True
@@ -207,10 +232,10 @@ class RoutingConfig:
             return self.numbers[normalized], "number_match"
         return self.default, "default" if self.default else "unmapped"
 
-    def explain(self, number: str | None) -> dict:
+    def explain(self, number: str | None, *, outbound: bool = False) -> dict:
         from dataclasses import asdict
 
-        route, reason = self.resolve(number)
+        route, reason = self.resolve_outbound(number) if outbound else self.resolve(number)
         return {
             "reason": reason,
             "route": asdict(route) if route else None,

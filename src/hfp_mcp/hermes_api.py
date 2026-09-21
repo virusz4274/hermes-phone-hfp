@@ -53,7 +53,7 @@ class HermesAPI:
         return bridge
 
     async def bind(
-        self, call_id: str, number: str | None, endpoint: str, policy: str, *, parent_binding_id=None
+        self, call_id: str, number: str | None, endpoint: str, policy: str, *, parent_binding_id=None, outbound=False
     ) -> dict:
         return await self.request(
             "POST",
@@ -64,12 +64,21 @@ class HermesAPI:
                 "number": number,
                 "endpoint": endpoint,
                 "policy": policy,
+                **({"outbound": True} if outbound else {}),
                 **({"parent_binding_id": parent_binding_id} if parent_binding_id else {}),
             },
         )
 
     async def revoke(self, session_id: str):
         await self.request("DELETE", f"v1/hfp/bindings/{session_id}", bridge=True)
+
+    async def caller_notes(self, number, *, notes=None):
+        return await self.request("POST", "v1/hfp/caller-notes/" + ("read" if notes is None else "update"),
+                                  bridge=True, json={"number": number, **({"notes": notes} if notes is not None else {})})
+
+    async def binding_notes(self, session_id, *, action, notes=None):
+        return await self.request("POST", f"v1/hfp/bindings/{session_id}/notes", bridge=True,
+                                  json={"action": action, **({"notes": notes} if action == "update" else {})})
 
     async def stop(self, run_id=None):
         target = run_id or self.run_id

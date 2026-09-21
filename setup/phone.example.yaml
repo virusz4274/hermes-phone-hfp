@@ -9,6 +9,10 @@ phone:
   auto_reconnect: false
   max_phone_tasks: 2  # Includes tasks continuing after hangup; no queue.
   background_task_minutes: 30  # Separate revocable run authorization.
+  # With multiple endpoints, choose one for new outgoing destinations:
+  # outbound_endpoint: personal
+  # With one endpoint this is automatic. New recipients get conversation and
+  # their own notes only; this does not authorize incoming calls or owner tools.
   endpoints:
     personal:
       # Existing Hermes profile and its API URL (not the HFP daemon's URL).

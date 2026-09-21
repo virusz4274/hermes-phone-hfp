@@ -13,7 +13,10 @@ minimal reproduction using synthetic callers. No response-time guarantee is made
 
 ## Trust and data
 
-- Caller ID selects a route; it is not proof of identity. An admin route permits
+- The paired phone's Bluetooth-reported caller number is the trusted routing and
+  caller-memory identity. There is no additional caller verification step. This
+  does not prove who is speaking: spoofed or reassigned numbers reported as a
+  known number are indistinguishable under this design. An admin route permits
   that profile's tools, subject to Hermes approvals. Keep normal approvals enabled.
 - Restricted callers need dedicated profiles and integrations that enforce caller
   ownership. Profiles are not operating-system sandboxes.

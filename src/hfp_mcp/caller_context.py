@@ -132,9 +132,16 @@ class CallerStore:
                 raise PermissionError(
                     "persistent caller memory is disabled for this call"
                 )
+            self.replace_notes(binding["profile"], binding["caller_id"], note)
+
+    def replace_notes(self, profile: str, caller_id: str, note: str) -> None:
+        """Storage primitive; callers must authorize the resolved caller/profile."""
+        if not isinstance(note, str) or len(note) > 8000:
+            raise ValueError("caller note must be text of at most 8000 characters")
+        with self._lock, self.db:
             self.db.execute(
                 "INSERT INTO notes VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET note=excluded.note, updated=excluded.updated",
-                (binding["profile"], binding["caller_id"], note, time.time()),
+                (profile, caller_id, note, time.time()),
             )
 
     def forget(self, profile: str, caller_id: str) -> None:

@@ -23,10 +23,11 @@ async def test_controller_reconnect_supplies_idempotency_identity(monkeypatch):
     assert calls[0][1].startswith("phone-connect-")
 
 
-async def test_interactive_start_requires_route_and_reports_voice_ready(monkeypatch):
-    state = SimpleNamespace(call_id="call-a")
+async def test_interactive_start_honors_blocked_numbers_and_reports_voice_ready(monkeypatch):
+    state = SimpleNamespace(call_id="call-a", versioned_snapshot=lambda: {})
     controller = SimpleNamespace(
-        config=RoutingConfig.parse(routing_data()),
+        config=RoutingConfig.parse({**routing_data(), "blocked": ["+919876543211"]}),
+        discard_outbound=lambda _: None,
         status={
             "call_id": "call-a",
             "state": "ready",
@@ -36,13 +37,15 @@ async def test_interactive_start_requires_route_and_reports_voice_ready(monkeypa
     )
     calls = []
 
-    async def place(number, request_id):
+    async def place(number, request_id, **kwargs):
         calls.append(number)
-        return {"ok": True}
+        return {"ok": True, "result": {"call_id": "call-a"}}
 
     monkeypatch.setattr(server, "_state", state)
     monkeypatch.setattr(server, "_phone_controller", controller)
-    monkeypatch.setattr(server, "place_call", place)
+    monkeypatch.setattr(server, "_place_call", place)
+    monkeypatch.setattr(server, "_request_ledger", None)
+    monkeypatch.setattr(server, "_runtime_config", None)
     denied = await server.start_phone_call("+919876543211", "request-a")
     assert denied["ok"] is False
     assert calls == []
