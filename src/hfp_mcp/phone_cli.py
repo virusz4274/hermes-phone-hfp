@@ -36,11 +36,12 @@ def main(argv):
         parser.add_argument("action", choices=["explain", "validate"])
         parser.add_argument("number", nargs="?")
         parser.add_argument("--config", type=Path)
+        parser.add_argument("--outgoing", action="store_true", help="Explain an owner-requested outgoing destination")
         args = parser.parse_args(argv[1:])
         config = RoutingConfig.load(args.config)
         print(
             json.dumps(
-                config.explain(args.number)
+                config.explain(args.number, outbound=args.outgoing)
                 if args.action == "explain"
                 else {"valid": True, "enabled": config.enabled},
                 indent=2,

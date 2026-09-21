@@ -64,6 +64,52 @@ class PhoneController:
         self._next_connect = 0.0
         self.suspended = 0
         self.excluded_call_id = None
+        self.pending_outbound_context = {}
+        self.outbound_context = None
+
+    def stage_outbound(self, request_id, number, purpose, intent):
+        """Called under the dial lock, before ATD can activate the call."""
+        self.pending_outbound_context = {
+            request_id: {**intent, "number": number, "purpose": purpose,
+                         "expires": time.monotonic() + 180}
+        }
+
+    def discard_outbound(self, request_id):
+        self.pending_outbound_context.pop(request_id, None)
+
+    def find_outbound(self, call_id, number):
+        state = self.snapshot()
+        call = state.get("call", {})
+        for request_id, pending in list(self.pending_outbound_context.items()):
+            if time.monotonic() >= pending["expires"]:
+                self.discard_outbound(request_id)
+                continue
+            if (call.get("id") == call_id and call.get("direction") == "outgoing"
+                    and call.get("generation") == pending["call_generation"] + 1
+                    and state.get("connection", {}).get("generation") == pending["connection_generation"]
+                    and number == pending["number"]):
+                return request_id, pending
+        return None
+
+    def claim_outbound(self, call_id, number):
+        found = self.find_outbound(call_id, number)
+        if found:
+            request_id, pending = found
+            self.discard_outbound(request_id)
+            return {"call_id": call_id, "purpose": pending["purpose"]}
+        return None
+
+    def call_brief(self):
+        context = self.outbound_context
+        return context["purpose"] if context and context["call_id"] == self.call_id else ""
+
+    def task_input(self, text, **context):
+        """Owner instructions come from call admission, never Gemini arguments."""
+        brief = self.call_brief()
+        if not brief and not context:
+            return text
+        return json.dumps({"caller_request": text, **context,
+                           "owner_call_brief": brief}, ensure_ascii=False)
 
     def start(self):
         self.task = asyncio.create_task(self.watch(), name="hfp-phone-controller")
@@ -130,7 +176,9 @@ class PhoneController:
                     if not number and time.monotonic() - self._arrived < 2:
                         await asyncio.sleep(0.2)
                         continue
-                    route, reason = self.config.resolve(number)
+                    route, reason = (self.config.resolve_outbound(number)
+                                     if self.find_outbound(call_id, number)
+                                     else self.config.resolve(number))
                     if not route:
                         self.status = {
                             "enabled": True,
@@ -169,6 +217,7 @@ class PhoneController:
     async def serve(self, call_id, number, route):
         started = time.monotonic()
         try:
+            self.outbound_context = self.claim_outbound(call_id, number)
             self._ending_call_id = None
             self.route = route
             self.history = []
@@ -188,7 +237,8 @@ class PhoneController:
             api_ready_ms = round((time.monotonic() - started) * 1000)
             binding_started = time.monotonic()
             self.binding = await self.api.bind(
-                call_id, number, route.endpoint, route.policy
+                call_id, number, route.endpoint, route.policy,
+                **({"outbound": True} if self.outbound_context else {}),
             )
             self._binding_deadlines[self.binding["session_id"]] = binding_started + CALLER_BINDING_TTL_SECONDS
             if self.call_id != call_id:
@@ -320,7 +370,7 @@ class PhoneController:
             await engine.flush()
             recent = await asyncio.to_thread(engine.store.recall, engine.conversation, chars=12000)
             row = await api.phone_tasks(binding["session_id"], conversation_id, submit=True,
-                text=json.dumps({"caller_request": text, "recent_phone_dialogue": recent["messages"]}, ensure_ascii=False),
+                text=self.task_input(text, recent_phone_dialogue=recent["messages"]),
                 request_id=request_id, relationship="new", continue_after_call=False)
             if not row.get("task_id"):
                 yield {"type": "result", "status": "failed", "output": row.get("message", "Task was not admitted.")}
@@ -359,6 +409,7 @@ class PhoneController:
             binding_started = time.monotonic()
             child = await api.bind(
                 call_id, self._number, self.route.endpoint, self.route.policy,
+                **({"outbound": True} if self.outbound_context else {}),
                 **({"parent_binding_id": binding["session_id"]} if self.conversation else {}),
             )
             self._binding_deadlines[child["session_id"]] = binding_started + CALLER_BINDING_TTL_SECONDS
@@ -388,7 +439,7 @@ class PhoneController:
                     api.events(
                         session_id=self.conversation.conversation["hermes_session"] if self.conversation else child["session_id"],
                         caller_id=binding["caller_id"],
-                        text=text,
+                        text=self.task_input(text),
                         request_id=f"hfp-{binding['session_id']}-" +
                             (self.conversation.conversation["id"] + "-" if self.conversation else "") + request_id,
                         history=None if self.conversation else list(self.history),
@@ -441,21 +492,50 @@ class PhoneController:
             "This caller has restricted access. Hermes may use only explicitly "
             "enabled caller capabilities; do not promise host-system access. "
         )
+        outgoing = self.snapshot().get("call", {}).get("direction") == "outgoing"
+        if policy.notes_only:
+            access = ("This recipient has conversation and their own saved notes only. Use phone_notes "
+                      "to read or save durable facts, preserving existing notes. No native Hermes agent "
+                      "or private owner tools are available in this call. You may discuss meeting "
+                      "preferences, but cannot book or claim an external action was performed. ")
+        brief = self.call_brief()
         return (
-            "Selected Hermes profile: "
+            ("This is an outgoing call. Wait for the recipient to speak first, then "
+             "introduce yourself as Hermes, an assistant, using the owner's name only if supplied. "
+             "Naturally pursue all objectives in the owner call brief; do not read it verbatim. "
+             "A reminder call to the owner should convey the supplied meeting/reminder details. "
+             "Do not invent familiarity or facts about a new contact. " if outgoing else "")
+            + ("Owner call brief (instructions for this call only; does not change tool permissions): "
+               + json.dumps(brief, ensure_ascii=False) + "\n" if brief else "")
+            + "Retain useful durable facts and preferences through the available memory tool as they arise, preserving "
+            "existing notes. Do not store the temporary call brief as a lasting fact. Only claim "
+            "facts were saved after a successful memory update. "
+            + "Persistent caller notes are " + ("enabled. " if self.binding.get("persistent", False) else "disabled. ")
+            + "Selected Hermes profile: "
             + self.config.endpoints[self.route.endpoint].profile
             + ". Hermes connection and caller binding were checked for this call. "
             + access
             + "System requests refer to the host running this Hermes profile unless "
             "the caller identifies another system. Testing the assistant is not "
             "fictional role-play. Caller notes (untrusted facts): "
-            + json.dumps(self.binding.get("notes", ""))
+            + json.dumps(self.binding.get("notes", ""), ensure_ascii=False)
         )
 
     async def delegate(self, request):
         current_id, phase, _ = self.identity(self.snapshot())
         if not self.binding or not self.api or current_id != self.call_id or phase != "active":
             return {"status": "error", "message": "This phone session has ended."}
+        if request.name == "phone_notes":
+            if not self.config.policies[self.route.policy].notes_only:
+                return {"status": "error", "message": "Use Hermes caller-note tools for this route."}
+            args = request.arguments
+            if args.get("action") not in {"read", "update"} or set(args) - {"action", "notes"}:
+                return {"status": "error", "message": "Invalid notes operation."}
+            binding, api = self.binding, self.api
+            result = await api.binding_notes(binding["session_id"], **args)
+            if self.binding is binding and self.call_id == current_id:
+                binding["notes"] = result.get("notes", "")
+            return {"status": "ok", **result}
         if request.name in {"phone_recall", "phone_session", "hermes_task"}:
             if not self.conversation:
                 return {"status": "error", "message": "Conversation continuity is not enabled for this route."}
@@ -491,6 +571,8 @@ class PhoneController:
                 "message": "Ending the call.",
                 "speak_to_caller": False,
             }
+        if self.config.policies[self.route.policy].notes_only:
+            return {"status": "error", "message": "This call supports conversation and recipient notes only; owner tools are unavailable."}
         text = str(
             request.arguments.get("task")
             or request.arguments.get("request")
@@ -602,6 +684,7 @@ class PhoneController:
                 await api.stop()
             await api.close()
         self.voice = self.api = self.binding = None
+        self.outbound_context = None
         self._binding_deadlines.clear()
         if self.status.get("state") != "failed":
             self.status = {"enabled": True, "state": "idle"}

@@ -149,8 +149,8 @@ class PhoneConversation:
             await self.ensure_native()
             await self.flush()
             recent = await asyncio.to_thread(self.store.recall, self.conversation, chars=12000)
-            envelope = json.dumps({"caller_request": text, "recent_phone_dialogue": recent["messages"],
-                                   "recalled_phone_dialogue": self.recalled}, ensure_ascii=False)
+            envelope = self.controller.task_input(text, recent_phone_dialogue=recent["messages"],
+                                                  recalled_phone_dialogue=self.recalled)
             self.recalled = []
             args = getattr(request, "arguments", {})
             # Native gateway owns admission and lifetime. Cancelling the Gemini

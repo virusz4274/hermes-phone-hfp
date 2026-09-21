@@ -7,11 +7,13 @@ resolve mutable controller/ledger objects at request time.
 from __future__ import annotations
 import asyncio
 import time
+import httpx
 from dataclasses import dataclass
 from typing import Any, Callable
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from .settings import RuntimeConfig
+from .contracts import normalize_phone_number, validate_call_purpose
 
 
 @dataclass(frozen=True)
@@ -117,12 +119,57 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         return JSONResponse(result, status_code=200 if result.get("ok") else 403)
 
     async def _phone_start(request):
-        body = await request.json()
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("expected an object")
+            purpose = validate_call_purpose(body.get("purpose", body.get("brief", "")))
+            if not all(isinstance(body.get(key), str) for key in ("number", "request_id")):
+                raise ValueError("number and request_id must be text")
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(
             await runtime.start_call(
-                str(body.get("number", "")), str(body.get("request_id", ""))
+                body["number"], body["request_id"], purpose,
             )
         )
+
+    async def _caller_notes(request):
+        from .hermes_api import HermesAPI
+        from .routing import RoutingConfig
+
+        if request.path_params["action"] not in {"read", "update"}:
+            return JSONResponse({"error": "unknown note operation"}, status_code=404)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not isinstance(body.get("number"), str):
+                raise ValueError("number must be text")
+            if set(body) - {"number", "notes"}:
+                raise ValueError("unexpected caller notes argument")
+            update = request.path_params["action"] == "update"
+            notes = body.get("notes")
+            if update and (not isinstance(notes, str) or len(notes) > 8000):
+                raise ValueError("notes must be text of at most 8000 characters")
+            controller = runtime.controller()
+            routing = controller.config if controller else RoutingConfig.load()
+            number = normalize_phone_number(body["number"], routing.region)
+            route, reason = routing.resolve_outbound(number)
+            if not route:
+                return JSONResponse({"error": reason}, status_code=403)
+            if update and not routing.policies[route.policy].remember:
+                return JSONResponse({"error": "persistent caller memory is disabled"}, status_code=403)
+            api = HermesAPI(routing.endpoints[route.endpoint])
+            try:
+                return JSONResponse(await api.caller_notes(number, **({"notes": notes} if update else {})))
+            finally:
+                await api.close()
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            return JSONResponse({"error": "caller notes request rejected"}, status_code=code if code in {400, 403} else 502)
+        except httpx.TransportError:
+            return JSONResponse({"error": "caller notes unavailable; update outcome may be unconfirmed"}, status_code=502)
 
     async def _phone_approval(request):
         if runtime.controller() is None:
@@ -218,6 +265,7 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             return JSONResponse({"error": "Invalid recall request"}, status_code=400)
 
     routes = [
+        Route("/v1/phone/caller-notes/{action}", _caller_notes, methods=["POST"]),
         Route("/v1/phone/recall", _phone_recall, methods=["POST"]),
         Route("/v1/phone", _phone_status, methods=["GET"]),
         Route("/v1/phone/transcripts", _transcripts, methods=["GET"]),
