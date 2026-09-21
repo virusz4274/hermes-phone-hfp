@@ -86,6 +86,9 @@ Calendar, booking, and custom business workflows are supplied by standard Hermes
 
 ## Development
 
+See [TODO](TODO.md) for pending caller-memory recall, number-binding checks, and
+history work, including which parts already exist.
+
 See [Contributing](CONTRIBUTING.md) for environment creation without changing
 Bluetooth services. Once the environment exists:
 
