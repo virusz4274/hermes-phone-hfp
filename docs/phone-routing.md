@@ -334,7 +334,67 @@ already in progress; its result cannot refresh a reset or ended call.
 Classic STT/TTS also uses persistent task history and recent phone context, while
 the background conversational flow and the voice-control tools above use Gemini.
 
-`hfp_caller_read` and `hfp_caller_update` operate only on the caller bound to the current session. They do not accept another phone number or profile. Notes are bounded to 8,000 characters and retained until forgotten. The model is told that notes are untrusted facts, not instructions. Gemini delegates lasting caller facts/preferences to Hermes for retention; the audio session itself is not a memory store.
+`hfp_caller_read` and `hfp_caller_update` operate only on the caller bound to the current session. They do not accept another phone number or profile. Notes are bounded to 8,000 characters and retained until forgotten. The model is told that notes are untrusted facts, not instructions. The controller automatically extracts permitted lasting facts for closeout, and explicit notes tools remain available; the audio session itself is not a memory store.
+
+Gemini also receives `phone_notes` on normal routes with admin or
+`hfp_caller_read` permission, so checking notes does not require a background
+Hermes task. Reads and updates independently enforce the corresponding caller
+capability; read access does not grant update access. Gemini checks current notes
+for memory questions and uses `phone_recall` for specific retained dialogue when
+continuity is enabled. A failed or denied lookup is not an empty memory result.
+Different phone numbers have separate caller records, even when they share an
+admin policy and profile.
+
+### Automatic call memory closeout
+
+For routes with `remember: true` and caller-note write permission, the controller
+extracts useful facts, decisions, and commitments during the call and finishes
+saving after hangup. The conversational agent does not need to invoke a notes
+tool. This works with Gemini and classic voice, with or without continuity.
+Extraction uses the routed Hermes profile's tools-disabled auxiliary model path
+(`auxiliary.phone_memory` can configure that task); it does not start a personal
+agent, create reminders, or perform actions discussed on the call.
+
+Notes and transcripts serve different purposes. Notes provide quick, dated
+updates; enabled transcripts retain the detailed conversation for exact questions.
+Automatic notes never replace or delete transcripts and do not change transcript
+opt-ins or existing retention. With transcripts disabled, dialogue is processed
+in memory and only extracted facts/checkpoints are persisted. Checkpoints are
+attempted during the call, with a bounded queue and a final flush on hangup.
+
+Set `phone.timezone` to an IANA timezone such as `Asia/Kolkata`. It defaults to the
+host timezone (UTC if unavailable). Each update includes the originating call,
+local reporting timestamp, and caller attribution. Relative dates use the
+statement's original local date, including when a call crosses midnight. Ambiguous
+dates remain uncertain; a caller's reported completion is not a verified action.
+
+Notes reads return `revision`. All public replacement writes, including
+`hfp_caller_update`, `hfp_phone_caller_update`, and `phone_notes`, require
+`expected_revision` from that read. A stale write returns HTTP 409 (or
+`notes_conflict` in the caller tool): read again and merge. Existing notes are
+preserved while dated additions and corrections are appended. An exact fact
+already saved during the call receives its missing date/source annotation without
+adding another copy of that fact. The 8,000-character
+limit still applies; capacity failure leaves the old notes intact.
+
+The controller status and persisted call summary include `memory_save` with
+`pending`, `saved`, `skipped`, or `failed`, plus a reason and capture completeness.
+`already_saved` means no additional write was necessary. `incomplete_capture`
+means available updates may have been saved, but some dialogue was unavailable;
+check `saved_updates`. Transcript-storage errors remain separate. No proactive
+owner notification is sent by this feature.
+
+Ordinary caller bindings are revoked at hangup. A private, call-scoped closeout
+credential permits only extracting and merging that call's data, with a maximum
+30-second final transcription flush and retries for up to 24 hours after hangup.
+Restart recovery uses durable extracted checkpoints and still-permitted retained
+transcripts, never an expired caller binding. A crash can lose untranscribed audio
+or transient text; incomplete recovery is reported. Forgetting notes invalidates
+pending closeouts, and route/permission changes are checked again before writes.
+Internal gateway receipts are removed after their recovery window plus one day;
+daemon save reports follow diagnostic retention. Saved caller notes remain until
+forgotten. Unsupported gateways report `closeout_unavailable`; ordinary calls
+continue. Upgrade both daemon and gateway plugin for this feature.
 
 Withheld callers receive separate ephemeral identities and cannot save persistent notes. `remember: false` also disables persistence. Receptionist profiles must not copy caller details into global MEMORY.md, USER.md, or a shared external memory provider.
 

@@ -33,3 +33,15 @@ Record hardware results with phone model/OS, controller chipset, host OS/kernel,
 BlueZ/WirePlumber versions, Hermes commit, voice backend, incoming/outgoing calls,
 interruption, hangup/reconnect and restart behavior. Do not include caller IDs,
 Bluetooth addresses, transcripts, or credentials in public reports.
+
+Automatic call memory uses Hermes's `agent.auxiliary_client.async_call_llm` under
+the routed profile scope, with no action tools. The bridge advertises
+`call_memory_closeout` only when that interface exists. Provider availability and
+extraction quality still require a live check. The dedicated `auxiliary.phone_memory`
+task uses normal Hermes auxiliary routing and can be configured in the profile.
+
+Notes APIs now return `revision` and require `expected_revision` for replacement
+writes. Upgrade daemon and plugin together. Old clients that omit the revision
+receive a validation error; stale revisions receive a conflict instead of
+silently overwriting concurrent updates. Database additions are automatic and
+preserve existing notes and transcripts.

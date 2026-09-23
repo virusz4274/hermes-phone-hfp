@@ -16,6 +16,10 @@ from .security import load_or_create_token
 from .contracts import CALLER_BINDING_TTL_SECONDS
 
 
+class NoteConflict(ValueError):
+    """The supplied note revision is stale; read and merge again."""
+
+
 class CallerStore:
     def __init__(self, path: Path):
         self.path = path
@@ -41,6 +45,9 @@ class CallerStore:
                 profile TEXT NOT NULL, caller_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS run_bindings (
                 run_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, root_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS note_versions (
+                profile TEXT NOT NULL, caller_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile, caller_id));
         """)
         self.db.commit()
         from .phone_tasks import TaskRegistry
@@ -123,33 +130,61 @@ class CallerStore:
             ).fetchone()
         return row[0] if row else ""
 
-    def update_for_session(self, session_id: str, note: str) -> None:
+    def snapshot(self, profile: str, caller_id: str) -> dict:
+        with self._lock:
+            row = self.db.execute("""SELECT
+                COALESCE((SELECT note FROM notes WHERE profile=? AND caller_id=?), ''),
+                COALESCE((SELECT revision FROM note_versions WHERE profile=? AND caller_id=?), 0),
+                COALESCE((SELECT generation FROM note_versions WHERE profile=? AND caller_id=?), 0)""",
+                (profile, caller_id) * 3).fetchone()
+            return dict(zip(("notes", "revision", "generation"), row))
+
+    def update_for_session(self, session_id: str, note: str, *, expected_revision=None) -> None:
         if not isinstance(note, str) or len(note) > 8000:
             raise ValueError("caller note must be text of at most 8000 characters")
         with self._lock, self.db:
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
             binding = self.binding(session_id)
             if not binding["persistent"]:
                 raise PermissionError(
                     "persistent caller memory is disabled for this call"
                 )
-            self.replace_notes(binding["profile"], binding["caller_id"], note)
+            self.replace_notes(binding["profile"], binding["caller_id"], note, expected_revision=expected_revision)
 
-    def replace_notes(self, profile: str, caller_id: str, note: str) -> None:
+    def replace_notes(self, profile: str, caller_id: str, note: str, *, expected_revision=None) -> None:
         """Storage primitive; callers must authorize the resolved caller/profile."""
         if not isinstance(note, str) or len(note) > 8000:
             raise ValueError("caller note must be text of at most 8000 characters")
         with self._lock, self.db:
-            self.db.execute(
-                "INSERT INTO notes VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET note=excluded.note, updated=excluded.updated",
-                (profile, caller_id, note, time.time()),
-            )
+            self._replace_notes(profile, caller_id, note, expected_revision=expected_revision)
+
+    def _replace_notes(self, profile, caller_id, note, *, expected_revision=None):
+        """Transaction-internal write, also used by atomic closeout commits."""
+        if not isinstance(note, str) or len(note) > 8000:
+            raise ValueError("caller note must be text of at most 8000 characters")
+        if not self.db.in_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        current = self.snapshot(profile, caller_id)
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision != current["revision"]):
+            raise NoteConflict("notes changed; read the latest notes and merge again")
+        self.db.execute(
+            "INSERT INTO note_versions VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET revision=excluded.revision",
+            (profile, caller_id, current["revision"] + 1, current["generation"]))
+        self.db.execute(
+            "INSERT INTO notes VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET note=excluded.note, updated=excluded.updated",
+            (profile, caller_id, note, time.time()))
 
     def forget(self, profile: str, caller_id: str) -> None:
         with self._lock, self.db:
-            self.db.execute(
-                "DELETE FROM notes WHERE profile=? AND caller_id=?",
-                (profile, caller_id),
-            )
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
+            old = self.snapshot(profile, caller_id)
+            self.db.execute("INSERT INTO note_versions VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET revision=excluded.revision,generation=excluded.generation",
+                            (profile, caller_id, old["revision"] + 1, old["generation"] + 1))
+            self.db.execute("DELETE FROM notes WHERE profile=? AND caller_id=?", (profile, caller_id))
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_closeouts'").fetchone():
+                self.db.execute("DELETE FROM memory_closeouts WHERE profile=? AND caller_id=?", (profile, caller_id))
 
     def close(self):
         self.db.close()

@@ -31,3 +31,13 @@ minimal reproduction using synthetic callers. No response-time guarantee is made
   [data retention](docs/phone-routing.md#conversation-continuity).
 - Local files are private to the service account, not encrypted against that
   account or a machine administrator. Backups may retain deleted live data.
+
+Automatic note closeout uses a separate private credential created from an
+admitted call's binding. It cannot run tools, select another caller/profile, or
+renew caller authority. Ordinary caller bindings remain revoked after hangup.
+Extracted checkpoints may be merged for a bounded recovery period; current
+routing, note-write permission, and forget generations are checked before commit.
+Notes and dialogue remain untrusted input to a tools-disabled extraction model.
+Checkpoint credentials stay in the private daemon ledger and are never included
+in voice context or public status. Forgetting notes removes pending gateway
+checkpoints and their credentials, so recovery cannot restore forgotten facts.

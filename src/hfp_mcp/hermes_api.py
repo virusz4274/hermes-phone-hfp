@@ -53,7 +53,7 @@ class HermesAPI:
         return bridge
 
     async def bind(
-        self, call_id: str, number: str | None, endpoint: str, policy: str, *, parent_binding_id=None, outbound=False
+        self, call_id: str, number: str | None, endpoint: str, policy: str, *, parent_binding_id=None, outbound=False, memory_closeout=False
     ) -> dict:
         return await self.request(
             "POST",
@@ -65,6 +65,7 @@ class HermesAPI:
                 "endpoint": endpoint,
                 "policy": policy,
                 **({"outbound": True} if outbound else {}),
+                **({"memory_closeout": True} if memory_closeout else {}),
                 **({"parent_binding_id": parent_binding_id} if parent_binding_id else {}),
             },
         )
@@ -72,13 +73,17 @@ class HermesAPI:
     async def revoke(self, session_id: str):
         await self.request("DELETE", f"v1/hfp/bindings/{session_id}", bridge=True)
 
-    async def caller_notes(self, number, *, notes=None):
+    async def caller_notes(self, number, *, notes=None, expected_revision=None):
         return await self.request("POST", "v1/hfp/caller-notes/" + ("read" if notes is None else "update"),
-                                  bridge=True, json={"number": number, **({"notes": notes} if notes is not None else {})})
+                                  bridge=True, json={"number": number, **({"notes": notes, "expected_revision": expected_revision} if notes is not None else {})})
 
-    async def binding_notes(self, session_id, *, action, notes=None):
+    async def binding_notes(self, session_id, *, action, notes=None, expected_revision=None):
         return await self.request("POST", f"v1/hfp/bindings/{session_id}/notes", bridge=True,
-                                  json={"action": action, **({"notes": notes} if action == "update" else {})})
+                                  json={"action": action, **({"notes": notes, "expected_revision": expected_revision} if action == "update" else {})})
+
+    async def memory(self, receipt, operation, **body):
+        return await self.request("POST", f"v1/hfp/memory/{receipt['id']}/{operation}", bridge=True,
+                                  json={"token": receipt["token"], **body})
 
     async def stop(self, run_id=None):
         target = run_id or self.run_id

@@ -185,8 +185,8 @@ def test_gemini_function_declarations_expose_hermes_broker_tools():
     } <= names
     assert not ({"ask_mcp_client", "notify_mcp_client"} & names)
     ask_hermes = next(item for item in declarations if item["name"] == "ask_hermes")
-    assert "explicitly asks to use or ask Hermes" in ask_hermes["description"]
-    assert "external action" in ask_hermes["description"]
+    assert "explicit Hermes requests" in ask_hermes["description"]
+    assert "external tools" in ask_hermes["description"]
 
 
 def test_gemini_function_declarations_can_be_removed_by_role_policy():
@@ -301,8 +301,8 @@ def test_gemini_live_config_explicitly_follows_the_callers_language():
     assert "reply in that same language" in instruction
     for language in ("malayalam", "hindi", "tamil", "english"):
         assert language in instruction
-    assert "limited to english and spanish" in instruction
-    assert "do not call hermes merely to decide" in instruction
+    assert "default to english when unclear" in instruction
+    assert "clear speech or request, not one uncertain word" in instruction
 
 
 def test_structured_tool_outcome_preserves_safer_speech_suppression():

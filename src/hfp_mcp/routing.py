@@ -67,6 +67,7 @@ class RoutingConfig:
     max_phone_tasks: int = 2
     background_task_minutes: int = 30
     outbound: Route | None = None
+    timezone: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RoutingConfig":
@@ -192,6 +193,8 @@ class RoutingConfig:
         if outbound_endpoint is not None and outbound_endpoint not in endpoints:
             raise ValueError("outbound_endpoint references an undefined endpoint")
         outbound = Route(outbound_endpoint, OUTBOUND_NOTES_POLICY) if outbound_endpoint else None
+        from .call_memory import timezone_name
+        timezone = timezone_name(str(data.get("timezone", "")))
         return cls(
             True,
             region,
@@ -202,7 +205,7 @@ class RoutingConfig:
             blocked,
             boolean(data.get("auto_answer"), True),
             boolean(data.get("auto_reconnect"), False),
-            max_tasks, background_minutes, outbound,
+            max_tasks, background_minutes, outbound, timezone,
         )
 
     def resolve_outbound(self, number: str) -> tuple[Route | None, str]:

@@ -154,7 +154,7 @@ async def test_fallback_binding_notes_share_store_but_never_run_personal_agent(t
             binding = await response.json()
             sid = binding['session_id']
             assert store.binding(sid)['policy']['notes_only']
-            for data in [{'action': 'update', 'notes': 'Prefers morning calls'}, {'action': 'read'}]:
+            for data in [{'action': 'update', 'notes': 'Prefers morning calls', 'expected_revision': 0}, {'action': 'read'}]:
                 response = await client.post(f'/v1/hfp/bindings/{sid}/notes', headers=headers, json=data)
                 assert response.status == 200
                 assert (await response.json())['notes'] == 'Prefers morning calls'
