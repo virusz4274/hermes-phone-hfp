@@ -354,6 +354,12 @@ tool. This works with Gemini and classic voice, with or without continuity.
 Extraction uses the routed Hermes profile's tools-disabled auxiliary model path
 (`auxiliary.phone_memory` can configure that task); it does not start a personal
 agent, create reminders, or perform actions discussed on the call.
+Extraction requires an exact caller quote and an assessment of confidence and
+relevance, including near-term plans and delivery updates. Uncertain fragments,
+conversational filler, and assistant-capability
+discussion are excluded from notes; enabled transcripts still retain the dialogue.
+These semantic assessments depend on the model and cannot guarantee perfect
+recognition. A recorded request does not mean the requested action was completed.
 
 Notes and transcripts serve different purposes. Notes provide quick, dated
 updates; enabled transcripts retain the detailed conversation for exact questions.
@@ -376,6 +382,16 @@ preserved while dated additions and corrections are appended. An exact fact
 already saved during the call receives its missing date/source annotation without
 adding another copy of that fact. The 8,000-character
 limit still applies; capacity failure leaves the old notes intact.
+
+Explicit caller-tool saves also receive a server-generated call ID, original call
+timestamp, and timezone. Unchanged note lines retain their existing provenance;
+new or changed lines cannot supply their own source headers. Relative dates in
+these explicit saves use the bound call's start date; automatic updates use the
+individual statement's date. Request leases inherit the call's original metadata.
+Legacy bindings without that metadata cannot write notes; start a new call after
+upgrading. Owner edits outside a call remain owner-authored and are not assigned
+a fictitious call source. Repeated renderer labels and identical due-date suffixes
+are normalized without dropping different deadlines.
 
 The controller status and persisted call summary include `memory_save` with
 `pending`, `saved`, `skipped`, or `failed`, plus a reason and capture completeness.

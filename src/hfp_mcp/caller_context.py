@@ -50,6 +50,13 @@ class CallerStore:
                 generation INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile, caller_id));
         """)
         self.db.commit()
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            columns = {r[1] for r in self.db.execute('PRAGMA table_info(bindings)')}
+            if 'started_at' not in columns:
+                self.db.execute('ALTER TABLE bindings ADD COLUMN started_at REAL')
+            if 'timezone' not in columns:
+                self.db.execute("ALTER TABLE bindings ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
         from .phone_tasks import TaskRegistry
         self.tasks = TaskRegistry(self)
 
@@ -67,8 +74,11 @@ class CallerStore:
         ttl: float,
         remember: bool = True,
         anonymous_identity: str | None = None,
+        timezone: str = 'UTC',
     ) -> dict:
         caller_id = self.caller_id(number) if number else (anonymous_identity or secrets.token_hex(16))
+        from zoneinfo import ZoneInfo
+        ZoneInfo(timezone)
         with self._lock, self.db:
             existing = self.db.execute(
                 "SELECT call_id FROM bindings WHERE session_id=?", (session_id,)
@@ -79,7 +89,7 @@ class CallerStore:
                 "DELETE FROM bindings WHERE expires < ?", (time.time() - 86400,)
             )
             self.db.execute(
-                "INSERT INTO bindings VALUES (?,?,?,?,?,?,?,1)",
+                "INSERT INTO bindings (session_id,call_id,profile,caller_id,policy,persistent,expires,active) VALUES (?,?,?,?,?,?,?,1)",
                 (
                     session_id,
                     call_id,
@@ -90,12 +100,17 @@ class CallerStore:
                     time.time() + ttl,
                 ),
             )
+            # Request leases for a call inherit its original date/timezone.
+            source = self.db.execute('SELECT started_at,timezone FROM bindings WHERE call_id=? AND profile=? AND caller_id=? AND started_at IS NOT NULL ORDER BY started_at LIMIT 1',
+                                     (call_id, profile, caller_id)).fetchone()
+            self.db.execute('UPDATE bindings SET started_at=?,timezone=? WHERE session_id=?',
+                            (*(source or (time.time(), timezone)), session_id))
         return self.binding(session_id)
 
     def binding(self, session_id: str) -> dict:
         with self._lock:
             row = self.db.execute(
-                "SELECT call_id,profile,caller_id,policy,persistent,expires,active FROM bindings WHERE session_id=?",
+                "SELECT call_id,profile,caller_id,policy,persistent,expires,active,started_at,timezone FROM bindings WHERE session_id=?",
                 (session_id,),
             ).fetchone()
         if not row or not row[6] or row[5] <= time.time():
@@ -106,6 +121,7 @@ class CallerStore:
             caller_id=row[2],
             policy=json.loads(row[3]),
             persistent=bool(row[4]),
+            started_at=row[7], timezone=row[8],
         )
 
     def renew(self, session_id: str, ttl: float = CALLER_BINDING_TTL_SECONDS) -> None:
@@ -150,6 +166,11 @@ class CallerStore:
                 raise PermissionError(
                     "persistent caller memory is disabled for this call"
                 )
+            if binding['started_at'] is None:
+                raise PermissionError('legacy binding lacks call provenance; start a new call')
+            from .note_text import prepare_replacement
+            old = self.read(binding['profile'], binding['caller_id'])
+            note = prepare_replacement(old, note, binding)
             self.replace_notes(binding["profile"], binding["caller_id"], note, expected_revision=expected_revision)
 
     def replace_notes(self, profile: str, caller_id: str, note: str, *, expected_revision=None) -> None:

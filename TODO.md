@@ -145,7 +145,7 @@ The live prompt has now been consolidated from 779 to 339 words for normal
 continuity-enabled calls (excluding caller data and tool schemas). Repeated
 context/tool instructions were trimmed, and conditional hangup wording made
 consistent. Behavioral acceptance on another call remains open; this prompt
-refinement does not complete the code-level memory-quality work below.
+refinement is complemented by the code-level memory-quality fixes below.
 
 - [ ] **Natural use of memory.** Begin incoming calls with a normal greeting.
   Use caller facts quietly when relevant; do not open by asking whether the call
@@ -155,21 +155,27 @@ refinement does not complete the code-level memory-quality work below.
   transcripts for memory questions. Do not claim history is unavailable merely
   because notes are empty, or generalize one lookup failure into no access.
   Distinguish empty results, disabled persistence, expired history, and errors.
-- [ ] **Useful, appropriately qualified updates.** Save meaningful facts,
+- [x] **Useful, appropriately qualified updates.** Save meaningful facts,
   decisions, preferences, and commitments. Avoid promoting isolated, ambiguous
   recognition fragments or assistant-capability discussion into lasting facts.
   Preserve uncertainty and distinguish a requested callback from a confirmed
-  scheduled action; recording a request must not execute it.
-- [ ] **Trusted dates and provenance.** Attach new updates to the actual bound
+  scheduled action; recording a request must not execute it. Extraction now
+  requires exact caller evidence, confidence, and relevance. Short-term plans
+  remain relevant; unclear topic shifts are marked uncertain. Semantic
+  classification still depends on the model and is not an ASR accuracy guarantee.
+- [x] **Trusted dates and provenance.** Attach new updates to the actual bound
   call and its date/timezone in code. Preserve older facts' original provenance;
   never accept a model-invented call ID as authoritative. Apply this to explicit
   note updates as well as automatic closeout.
-- [ ] **Clean merging and existing-note review.** Prevent repeated fact prefixes,
+- [x] **Clean merging and existing-note review.** Prevent repeated fact prefixes,
   repeated due-date labels, and duplicate updates without erasing unrelated
   facts or dated corrections. Review affected existing entries against retained
   transcripts; repair verifiable metadata/formatting errors and flag ambiguous
   content for confirmation rather than silently rewriting what the caller said.
-  Keep the original transcripts available and unchanged.
+  Keep the original transcripts available and unchanged. Reviewed three affected
+  caller records against their own retained transcripts: corrected a fabricated
+  source, dated the legacy delivery/RAM update, normalized repeated labels, and
+  flagged unclear fragments without guessing their intended wording.
 - [ ] **Focused acceptance.** Verify natural greeting, accurate notes/transcript
   recall, dated delivery/RAM updates after abrupt hangup, concurrent merging,
   duplicate-save prevention, save failure reporting, and the existing

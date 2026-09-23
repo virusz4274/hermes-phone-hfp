@@ -240,7 +240,7 @@ class PhoneBridge:
             app.on_startup.append(tasks.start)
             app.on_cleanup.append(tasks.close)
 
-        from .call_memory import CallMemory
+        from .call_memory import CallMemory, timezone_name
         self.memory = CallMemory(self, _adapter)
         app.on_startup.append(self.memory.start)
         app.on_cleanup.append(self.memory.close)
@@ -323,6 +323,7 @@ class PhoneBridge:
                     ttl=CALLER_BINDING_TTL_SECONDS,
                     remember=policy.remember,
                     anonymous_identity=parent["caller_id"] if parent and not number else None,
+                    timezone=timezone_name(self.config.timezone),
                 )
                 note = (
                     self.store.read(self.profile, binding["caller_id"])
@@ -331,7 +332,6 @@ class PhoneBridge:
                 )
                 memory = None
                 if body.get("memory_closeout") and parent is None:
-                    from .call_memory import timezone_name
                     memory = self.memory.begin(session_id, number=number, outbound=outbound,
                                                timezone=timezone_name(self.config.timezone))
                 return web.json_response(

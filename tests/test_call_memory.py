@@ -28,7 +28,7 @@ async def extract(messages):
     body = json.loads(messages[-1]['content'])
     if 'events' not in body:
         return {'keep': [u['id'] for u in body['updates']]}
-    return {'updates': [dict(text=e['text'], source_event_id=e['event_id'], kind='fact', due_date=None)
+    return {'updates': [dict(text=e['text'], source_event_id=e['event_id'], evidence=e['text'], confidence='clear', relevance='relevant', kind='fact', due_date=None)
                         for e in body['events'] if e['direction'] == 'input' and e['event_id'] in body['new_event_ids']]}
 
 
@@ -38,7 +38,7 @@ def system(tmp_path):
     store = CallerStore(tmp_path / 'callers.sqlite3')
     policy = asdict(config.policies['owner'])
     policy['tools'] = sorted(policy['tools'])
-    store.bind(session_id='binding', call_id='call', profile='default', number=NUMBER, policy=policy, ttl=100)
+    store.bind(session_id='binding', call_id='call', profile='default', number=NUMBER, policy=policy, ttl=100, timezone=config.timezone)
     bridge = PhoneBridge(config, store, profile='default', profile_config={})
     memory = CallMemory(bridge, generate=extract)
     receipt = memory.begin('binding', number=NUMBER, outbound=False, timezone=config.timezone)
@@ -465,7 +465,7 @@ async def test_checkpoint_overlap_supplies_context_but_cannot_duplicate_evidence
         body = json.loads(messages[-1]['content'])
         assert body['events'][0]['text'] == first['text']
         assert body['new_event_ids'] == ['caller']
-        return {'updates': [dict(text='Agreed to deliver the RAM tomorrow.', source_event_id='caller', kind='commitment', due_date=None)]}
+        return {'updates': [dict(text='Agreed to deliver the RAM tomorrow.', source_event_id='caller', kind='commitment', due_date=None, evidence=second['text'], confidence='clear', relevance='relevant')]}
     memory.generate = inspect
     await memory.checkpoint(receipt['id'], [first, second])
     assert (await memory.finalize(receipt['id']))['status'] == 'saved'
@@ -488,13 +488,87 @@ def test_transcription_uses_first_fragment_time_even_when_flushed_next_day(monke
 async def test_deduplication_preserves_currency_and_changed_due_date(system):
     store, bridge, memory, receipt = system
     async def different(messages):
-        return {'updates': [
+        updates = [
             dict(text='Quoted $100.', source_event_id='a', kind='fact', due_date=None),
             dict(text='Quoted ₹100.', source_event_id='a', kind='fact', due_date=None),
             dict(text='Agreed delivery.', source_event_id='a', kind='commitment', due_date='2026-09-23'),
             dict(text='Agreed delivery.', source_event_id='a', kind='commitment', due_date='2026-09-24'),
-        ]}
+        ]
+        return {'updates': [{**u, 'evidence': 'A report with changed terms.', 'confidence': 'clear', 'relevance': 'relevant'} for u in updates]}
     memory.generate = different
     await memory.checkpoint(receipt['id'], [event('A report with changed terms.', 'a')])
     updates = memory._load(receipt['id'])['updates']
     assert len(updates) == 4 and len({u['id'] for u in updates}) == 4
+
+
+@pytest.mark.parametrize('confidence,relevance', [
+    ('uncertain', 'relevant'), ('clear', 'chitchat'), ('clear', 'assistant_capability'),
+])
+async def test_uncertain_or_irrelevant_updates_do_not_become_notes(system, confidence, relevance):
+    store, bridge, memory, receipt = system
+    async def classified(messages):
+        result = await extract(messages)
+        result['updates'][0].update(confidence=confidence, relevance=relevance)
+        return result
+    memory.generate = classified
+    await memory.checkpoint(receipt['id'], [event('A fragment needing context.')])
+    result = await memory.finalize(receipt['id'])
+    assert result['status'] == 'skipped' and result['reason'] == 'no_useful_updates'
+    assert store.read('default', store.caller_id(NUMBER)) == ''
+
+
+async def test_extraction_requires_actual_caller_quote_without_storing_quote(system):
+    store, bridge, memory, receipt = system
+    async def invented(messages):
+        result = await extract(messages)
+        result['updates'][0]['evidence'] = 'Something the caller never said.'
+        return result
+    memory.generate = invented
+    with pytest.raises(ValueError, match='caller evidence'):
+        await memory.checkpoint(receipt['id'], [event('I prefer afternoon calls.')])
+    assert not memory._load(receipt['id'])['event_hashes']
+    memory.generate = extract
+    await memory.checkpoint(receipt['id'], [event('I prefer afternoon calls.')])
+    update = memory._load(receipt['id'])['updates'][0]
+    assert not {'evidence', 'confidence', 'relevance'} & update.keys()
+    assert (await memory.finalize(receipt['id']))['status'] == 'saved'
+
+
+async def test_explicit_save_then_hangup_does_not_nest_or_duplicate_provenance(system):
+    store, bridge, memory, receipt = system
+    caller = store.caller_id(NUMBER)
+    store.update_for_session('binding', 'RAM replacement ordered.', expected_revision=0)
+    saved = store.read('default', caller)
+    await memory.checkpoint(receipt['id'], [event('RAM replacement ordered.')])
+    result = await memory.finalize(receipt['id'])
+    assert result['status'] == 'saved' and result['reason'] == 'already_saved'
+    assert store.read('default', caller) == saved
+    assert saved.count('; call call]') == 1
+
+
+async def test_same_fact_on_new_call_preserves_old_report_date(system):
+    store, bridge, memory, receipt = system
+    caller = store.caller_id(NUMBER)
+    older = '- [2026-09-20T12:00:00+05:30 Asia/Kolkata; call older] Caller-reported fact: RAM replacement ordered.'
+    store.replace_notes('default', caller, older)
+    await memory.checkpoint(receipt['id'], [event('RAM replacement ordered.')])
+    assert (await memory.finalize(receipt['id']))['status'] == 'saved'
+    lines = store.read('default', caller).splitlines()
+    assert lines[0] == older and len(lines) == 2
+    assert '; call call]' in lines[1]
+
+
+async def test_closeout_adds_missing_deadline_to_same_call_explicit_save(system):
+    store, bridge, memory, receipt = system
+    caller = store.caller_id(NUMBER)
+    store.update_for_session('binding', 'RAM delivery confirmed.', expected_revision=0)
+    old = store.read('default', caller)
+    async def with_deadline(messages):
+        result = await extract(messages)
+        if 'updates' in result:
+            result['updates'][0].update(text='RAM delivery confirmed.', due_date='2026-09-24')
+        return result
+    memory.generate = with_deadline
+    await memory.checkpoint(receipt['id'], [event('RAM delivery confirmed for 2026-09-24.')])
+    assert (await memory.finalize(receipt['id']))['status'] == 'saved'
+    assert store.read('default', caller) == old + ' Due: 2026-09-24.'

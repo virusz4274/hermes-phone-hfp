@@ -1,5 +1,6 @@
 """Live voice memory access follows the bound caller's existing permissions."""
 from dataclasses import asdict
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -56,7 +57,10 @@ async def test_direct_notes_authorization_and_isolation(tmp_path, monkeypatch, a
             assert update.status == (200 if writable else 403)
             if writable:
                 assert (await request(action='update', notes='stale replacement', expected_revision=1)).status == 409
-                assert store.read('default', caller) == 'Dated RAM delivery; meeting today'
+                saved = store.read('default', caller)
+                day = datetime.fromtimestamp(store.binding('sid')['started_at'], timezone.utc).date().isoformat()
+                assert saved.endswith('Caller note update: Dated RAM delivery; meeting ' + day)
+                assert '; call call]' in saved
             else:
                 assert store.read('default', caller) == 'Dated RAM delivery'
             store.revoke('sid')

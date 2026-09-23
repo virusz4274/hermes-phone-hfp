@@ -31,7 +31,8 @@ def test_caller_notes_survive_new_call_but_do_not_cross_callers_or_profiles(stor
     again = bind(store, "hfp-next")
     other = bind(store, "hfp-other", number="+919876543211")
     assert first["caller_id"] == again["caller_id"]
-    assert store.read("guest", again["caller_id"]) == "Prefers afternoon appointments"
+    assert store.read("guest", again["caller_id"]).endswith("Caller note update: Prefers afternoon appointments")
+    assert "; call call-a]" in store.read("guest", again["caller_id"])
     assert store.read("guest", other["caller_id"]) == ""
     assert store.read("owner", first["caller_id"]) == ""
     store.forget("guest", first["caller_id"])
@@ -111,4 +112,4 @@ def test_cancelled_request_cannot_borrow_next_requests_authority(store):
     with pytest.raises(PermissionError):
         store.update_for_session("hfp-first", "late cancelled write")
     store.update_for_session("hfp-second", "confirmed new request")
-    assert store.read("guest", second["caller_id"]) == "confirmed new request"
+    assert store.read("guest", second["caller_id"]).endswith("Caller note update: confirmed new request")

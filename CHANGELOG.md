@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Ground automatic memory extraction in caller quotes and filter uncertain or
+  irrelevant fragments. Stamp explicit caller saves with trusted call metadata,
+  preserve unchanged provenance, and avoid duplicate labels and hangup saves.
 - Consolidate live voice instructions around natural greetings, relevant memory
   use, and confirmed tool outcomes; remove repeated rules from caller context.
 - Preload Gemini dependencies before admitting calls and move call-time SDK
