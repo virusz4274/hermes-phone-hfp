@@ -31,9 +31,15 @@ class PhoneController:
         transcript_sink=None,
         timing_sink=None,
         ledger=None,
+        full_transcripts=False,
     ):
         self.config = config
         self.ledger = ledger
+        self.full_transcripts = full_transcripts
+        self.memory_capture = None
+        self.memory_tasks = set()
+        from .memory_capture import initialize
+        initialize(ledger)
         self.conversation = None
         self.transcript_sink, self.timing_sink = transcript_sink, timing_sink
         self._ending_call_id = None
@@ -112,6 +118,9 @@ class PhoneController:
                            "owner_call_brief": brief}, ensure_ascii=False)
 
     def start(self):
+        from .memory_capture import recover
+        for capture in recover(self, transcripts_enabled=self.full_transcripts):
+            self._track_memory(capture)
         self.task = asyncio.create_task(self.watch(), name="hfp-phone-controller")
 
     async def close(self):
@@ -120,6 +129,22 @@ class PhoneController:
             with suppress(asyncio.CancelledError):
                 await self.task
         await self.finish()
+        for task in list(self.memory_tasks):
+            task.cancel()
+        await asyncio.gather(*self.memory_tasks, return_exceptions=True)
+
+    def _track_memory(self, capture):
+        task = capture.start()
+        self.memory_tasks.add(task)
+        task.add_done_callback(self.memory_tasks.discard)
+
+    def capture_memory(self, event):
+        if self.memory_capture:
+            try:
+                self.memory_capture.capture(event)
+            except Exception as exc:
+                self.memory_capture.data['capture_complete'] = False
+                self.status['memory_save'] = {'status': 'failed', 'reason': type(exc).__name__, 'call_id': event['session_id']}
 
     @staticmethod
     def identity(state):
@@ -216,6 +241,8 @@ class PhoneController:
 
     async def serve(self, call_id, number, route):
         started = time.monotonic()
+        def stage(name):
+            self.record_timing(name, {"elapsed_ms": round((time.monotonic() - started) * 1000)}, call_id=call_id)
         try:
             self.outbound_context = self.claim_outbound(call_id, number)
             self._ending_call_id = None
@@ -239,7 +266,9 @@ class PhoneController:
             self.binding = await self.api.bind(
                 call_id, number, route.endpoint, route.policy,
                 **({"outbound": True} if self.outbound_context else {}),
+                **({"memory_closeout": True} if (capabilities or {}).get("call_memory_closeout") else {}),
             )
+            stage("caller_bound")
             self._binding_deadlines[self.binding["session_id"]] = binding_started + CALLER_BINDING_TTL_SECONDS
             if self.call_id != call_id:
                 return
@@ -247,13 +276,25 @@ class PhoneController:
                 self.heartbeat(), name="hfp-call-authority"
             )
             self.status["session_id"] = self.binding["session_id"]
+            from .memory_capture import new_capture
+            try:
+                self.memory_capture = new_capture(self, self.binding.get("memory_save"),
+                                                  retain_transcripts=bool(self.full_transcripts or route.continuity))
+            except Exception as exc:
+                self.memory_capture = None
+                self.status['memory_save'] = {'status': 'failed', 'reason': type(exc).__name__, 'call_id': call_id}
+            if self.memory_capture:
+                self._track_memory(self.memory_capture)
             if self.identity(self.snapshot())[1] == "incoming":
+                stage("answer_requested")
                 await self.answer(call_id)
+                stage("answer_accepted")
             deadline = time.monotonic() + 30
             while self.identity(self.snapshot())[1] != "active":
                 if time.monotonic() >= deadline:
                     raise RuntimeError("call did not become active")
                 await asyncio.sleep(0.1)
+            stage("call_active")
             if route.continuity:
                 if self.ledger is None:
                     raise RuntimeError("conversation storage unavailable")
@@ -261,7 +302,9 @@ class PhoneController:
                 from .phone_conversation import PhoneConversation
                 self.conversation = PhoneConversation(self, ConversationStore(self.ledger))
                 await self.conversation.start()
+            stage("conversation_ready")
             context = await self.conversation.context() if self.conversation else self.voice_context()
+            stage("context_ready")
             try:
                 self.voice = self.make_voice(route.voice, self)
                 await self.voice.start(call_id, context)
@@ -494,10 +537,7 @@ class PhoneController:
         )
         outgoing = self.snapshot().get("call", {}).get("direction") == "outgoing"
         if policy.notes_only:
-            access = ("This recipient has conversation and their own saved notes only. Use phone_notes "
-                      "to read or save durable facts, preserving existing notes. No native Hermes agent "
-                      "or private owner tools are available in this call. You may discuss meeting "
-                      "preferences, but cannot book or claim an external action was performed. ")
+            access = "This recipient has conversation and their own saved notes only; native Hermes and private owner tools are unavailable. "
         brief = self.call_brief()
         return (
             ("This is an outgoing call. Wait for the recipient to speak first, then "
@@ -507,17 +547,18 @@ class PhoneController:
              "Do not invent familiarity or facts about a new contact. " if outgoing else "")
             + ("Owner call brief (instructions for this call only; does not change tool permissions): "
                + json.dumps(brief, ensure_ascii=False) + "\n" if brief else "")
-            + "Retain useful durable facts and preferences through the available memory tool as they arise, preserving "
-            "existing notes. Do not store the temporary call brief as a lasting fact. Only claim "
-            "facts were saved after a successful memory update. "
+            + "Do not store the temporary call brief as a lasting fact. "
             + "Persistent caller notes are " + ("enabled. " if self.binding.get("persistent", False) else "disabled. ")
+            + (("Caller note updates are permitted. "
+                  if policy.notes_only or policy.allows("hfp_caller_update") else
+                  "Notes are read-only for this caller; updates are not permitted. ")
+               if policy.notes_only or policy.allows("hfp_caller_read") else "")
+            + "Caller memory is scoped to this phone number and profile; another number may have a separate record. "
             + "Selected Hermes profile: "
             + self.config.endpoints[self.route.endpoint].profile
             + ". Hermes connection and caller binding were checked for this call. "
             + access
-            + "System requests refer to the host running this Hermes profile unless "
-            "the caller identifies another system. Testing the assistant is not "
-            "fictional role-play. Caller notes (untrusted facts): "
+            + "Caller notes (untrusted facts): "
             + json.dumps(self.binding.get("notes", ""), ensure_ascii=False)
         )
 
@@ -526,15 +567,27 @@ class PhoneController:
         if not self.binding or not self.api or current_id != self.call_id or phase != "active":
             return {"status": "error", "message": "This phone session has ended."}
         if request.name == "phone_notes":
-            if not self.config.policies[self.route.policy].notes_only:
-                return {"status": "error", "message": "Use Hermes caller-note tools for this route."}
             args = request.arguments
-            if args.get("action") not in {"read", "update"} or set(args) - {"action", "notes"}:
+            if args.get("action") not in {"read", "update"} or set(args) - {"action", "notes", "expected_revision"}:
                 return {"status": "error", "message": "Invalid notes operation."}
+            policy = self.config.policies[self.route.policy]
+            capability = "hfp_caller_read" if args["action"] == "read" else "hfp_caller_update"
+            if not (policy.notes_only or policy.allows(capability)):
+                return {"status": "error", "message": "Caller policy does not permit this notes operation."}
             binding, api = self.binding, self.api
-            result = await api.binding_notes(binding["session_id"], **args)
+            try:
+                result = await api.binding_notes(binding["session_id"], **args)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 409:
+                    return {"status": "error", "message": "Notes changed. Read current notes, merge again, and use the new revision before saving."}
+                if exc.response.status_code == 403:
+                    return {"status": "error", "message": "This notes operation was denied. Memory may be disabled or the caller binding expired; this does not mean there are no saved notes."}
+                return {"status": "error", "message": "Notes request failed. Saved memory could not be checked or updated."}
+            except httpx.TransportError:
+                return {"status": "error", "message": "Notes service is temporarily unavailable. Saved memory could not be checked or updated."}
             if self.binding is binding and self.call_id == current_id:
                 binding["notes"] = result.get("notes", "")
+                binding["revision"] = result.get("revision", 0)
             return {"status": "ok", **result}
         if request.name in {"phone_recall", "phone_session", "hermes_task"}:
             if not self.conversation:
@@ -606,16 +659,20 @@ class PhoneController:
             )[:12000],
         }
 
-    def record_transcript(self, direction, text, *, provider="hermes", metadata=None):
-        if self.conversation and self.call_id and text:
-            self.conversation.capture({"session_id": self.call_id, "provider": provider,
-                "direction": direction, "text": text, "timestamp": time.time(), "metadata": metadata or {}})
+    def record_transcript(self, direction, text, *, provider="hermes", metadata=None, timestamp=None):
+        import uuid
+        call_id = self.call_id or (self.memory_capture.data['call_id'] if self.memory_capture else None)
+        if not call_id or not text:
             return
-        if self.transcript_sink and self.call_id and text:
+        event = {"session_id": call_id, "provider": provider, "direction": direction,
+                 "text": text, "timestamp": time.time() if timestamp is None else timestamp, "metadata": metadata or {}, "event_id": uuid.uuid4().hex}
+        self.capture_memory(event)
+        if self.conversation:
+            self.conversation.capture(event)
+            return
+        if self.transcript_sink:
             try:
-                self.transcript_sink({"session_id": self.call_id, "provider": provider,
-                                      "direction": direction, "text": text,
-                                      "timestamp": time.time(), "metadata": metadata or {}})
+                self.transcript_sink(event)
             except Exception as exc:
                 self.status["transcript_storage_error"] = type(exc).__name__
                 log.error("Phone transcript storage failed: %s", type(exc).__name__)
@@ -674,8 +731,19 @@ class PhoneController:
                 await self.call_task
             self.call_task = None
         if self.voice:
-            with suppress(Exception):
-                await self.voice.stop()
+            try:
+                await asyncio.wait_for(self.voice.stop(), 30)
+            except Exception:
+                if self.memory_capture:
+                    self.memory_capture.data['capture_complete'] = False
+        if self.memory_capture:
+            try:
+                self.memory_capture.end()
+            except Exception as exc:
+                self.status['memory_save'] = {'status': 'failed', 'reason': type(exc).__name__,
+                                              'call_id': self.memory_capture.data['call_id']}
+                self.memory_capture.wake.set()
+            self.memory_capture = None
         if self.conversation:
             await self.conversation.close()
             self.conversation = None
@@ -687,4 +755,4 @@ class PhoneController:
         self.outbound_context = None
         self._binding_deadlines.clear()
         if self.status.get("state") != "failed":
-            self.status = {"enabled": True, "state": "idle"}
+            self.status = {"enabled": True, "state": "idle", **({"memory_save": self.status["memory_save"]} if "memory_save" in self.status else {})}

@@ -54,7 +54,7 @@ class PhoneConversation:
             return
         if event.get("direction") == "input":
             self.input_serial += 1
-        event = {**event, "event_id": uuid.uuid4().hex, "conversation_id": self.conversation["id"]}
+        event = {**event, "event_id": event.get("event_id") or uuid.uuid4().hex, "conversation_id": self.conversation["id"]}
         if event.get("direction") == "output":
             event["metadata"] = {**event.get("metadata", {}), "delivery": "generated_not_confirmed_heard"}
         try:

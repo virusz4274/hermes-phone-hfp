@@ -154,14 +154,16 @@ async def test_fallback_binding_notes_share_store_but_never_run_personal_agent(t
             binding = await response.json()
             sid = binding['session_id']
             assert store.binding(sid)['policy']['notes_only']
-            for data in [{'action': 'update', 'notes': 'Prefers morning calls'}, {'action': 'read'}]:
+            for data in [{'action': 'update', 'notes': 'Prefers morning calls', 'expected_revision': 0}, {'action': 'read'}]:
                 response = await client.post(f'/v1/hfp/bindings/{sid}/notes', headers=headers, json=data)
                 assert response.status == 200
-                assert (await response.json())['notes'] == 'Prefers morning calls'
+                saved = (await response.json())['notes']
+                assert saved.endswith('Caller note update: Prefers morning calls')
+                assert '; call call]' in saved
             owner = await client.post('/v1/hfp/caller-notes/read', headers=headers, json={'number': NEW_NUMBER})
-            assert (await owner.json())['notes'] == 'Prefers morning calls'
+            assert (await owner.json())['notes'] == saved
             next_call = await client.post('/v1/hfp/bindings', headers=headers, json={**body, 'outbound': True, 'call_id': 'next-call'})
-            assert (await next_call.json())['notes'] == 'Prefers morning calls'
+            assert (await next_call.json())['notes'] == saved
             for path, args in [('/v1/runs', {'session_id': sid, 'input': 'read private owner memory'}),
                                ('/v1/hfp/sessions', {'binding_id': sid, 'conversation_id': 'new'})]:
                 assert (await client.post(path, headers=headers, json=args)).status == 403

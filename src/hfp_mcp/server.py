@@ -1363,7 +1363,7 @@ async def _run_handshake_and_session(context: RFCOMMConnectionContext) -> None:
                     if stats.get("session_id") == call_id:
                         _request_ledger.audit("voice_metrics", "final", call_id=call_id, detail={
                             key: stats.get(key) for key in (
-                                "timing_from_audio_acquisition_ms", "tool_bridge", "reconnect_count",
+                                "timing_from_audio_acquisition_ms", "startup_preparation_ms", "startup_audio_activity", "tool_bridge", "reconnect_count",
                                 "input_queue_overflow_frames", "dropped_playback_frames",
                                 "playback_queue_peak_ms", "transcript_storage_error",
                             )
@@ -3515,8 +3515,11 @@ def _create_phone_controller(routing):
             return ClassicVoice(controller, acquire=acquire_classic,
                 release=release_audio_stream, clear=clear_audio_playback)
         _gemini_allowed_tools = frozenset({"ask_hermes", "end_call", "phone_status"})
-        if controller.config.policies[controller.route.policy].notes_only:
+        policy = controller.config.policies[controller.route.policy]
+        if policy.notes_only:
             _gemini_allowed_tools = frozenset({"phone_notes", "end_call", "phone_status"})
+        elif policy.allows("hfp_caller_read"):
+            _gemini_allowed_tools |= {"phone_notes"}
         if controller.conversation:
             _gemini_allowed_tools |= {"phone_recall", "phone_session", "hermes_task"}
         routed_call_id = controller.call_id
@@ -3529,12 +3532,16 @@ def _create_phone_controller(routing):
             # Direct note updates refresh the binding; cold reconnects must not
             # restore the note snapshot captured before those writes.
             return controller.voice_context()
+        from .gemini_live import gemini_input_transcription_enabled, gemini_output_transcription_enabled
+        if controller.memory_capture and not (gemini_input_transcription_enabled() and gemini_output_transcription_enabled()):
+            controller.memory_capture.data['capture_complete'] = False
         _gemini_live_manager = GeminiLiveManager(
             ensure_stream=_acquire_gemini_stream, clear_playback=_clear_gemini_playback,
             hangup=routed_hangup, release_stream=release_audio_stream,
             allowed_tools=_gemini_allowed_tools, request_handler=controller.delegate,
             full_transcripts_enabled=bool(controller.conversation or (_runtime_config and _runtime_config.full_transcripts)),
             transcript_sink=controller.conversation.capture if controller.conversation else _persist_transcript,
+            memory_sink=controller.capture_memory if controller.memory_capture else None,
             context_provider=(controller.conversation.context if controller.conversation else
                               notes_context if "phone_notes" in _gemini_allowed_tools else None),
             context_ready=controller.conversation.voice_ready if controller.conversation else None)
@@ -3546,7 +3553,8 @@ def _create_phone_controller(routing):
 
     return PhoneController(routing, snapshot=_state.versioned_snapshot,
                            answer=answer, end=end, make_voice=voice, connect=connect,
-                           transcript_sink=_persist_transcript, timing_sink=timing, ledger=_request_ledger)
+                           transcript_sink=_persist_transcript, timing_sink=timing, ledger=_request_ledger,
+                           full_transcripts=bool(_runtime_config and _runtime_config.full_transcripts))
 
 
 @mcp.tool()
@@ -3639,6 +3647,13 @@ def create_http_app(
         global _phone_controller
         from .routing import RoutingConfig
         routing = RoutingConfig.load() if start_bluetooth else RoutingConfig()
+        if routing.enabled and any(route and route.voice == "gemini_live" for route in
+                                   [*routing.numbers.values(), routing.default, routing.outbound]):
+            from .gemini_live import warmup
+            try:
+                await warmup()
+            except Exception:
+                log.exception("Gemini startup preparation failed; call-time availability checks still apply")
         if start_bluetooth:
             await _start_bluetooth_stack()
         _state.set_health("http", "ok")

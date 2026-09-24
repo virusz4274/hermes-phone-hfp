@@ -141,6 +141,7 @@ class LiveAIManager:
         stale_request_limit: int = 256,
         full_transcripts_enabled: bool = True,
         transcript_sink=None,
+        memory_sink=None,
     ) -> None:
         self.provider = provider
         self._model = model
@@ -154,7 +155,9 @@ class LiveAIManager:
         self._pending_request_limit = max(1, int(request_queue_size))
         self._full_transcripts_enabled = bool(full_transcripts_enabled)
         self._transcript_sink = transcript_sink
+        self._memory_sink = memory_sink
         self._transcript_storage_error = None
+        self._memory_capture_error = None
 
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
@@ -186,6 +189,7 @@ class LiveAIManager:
             maxlen=max(8, int(transcript_event_limit))
         )
         self._transcript_fragments: dict[str, str] = {"input": "", "output": ""}
+        self._transcript_fragment_times = {}
         self._truncated_transcripts = 0
         # A single bounded caller utterance may be retained in memory long
         # enough to create the operator-approved redacted call summary.  It is
@@ -244,6 +248,7 @@ class LiveAIManager:
             "last_error": self._last_error or None,
             "transcript_redacted": not self._full_transcripts_enabled,
             "transcript_storage_error": self._transcript_storage_error,
+            "memory_capture_error": self._memory_capture_error,
             "last_input_transcript": (
                 self._last_input_transcript or None
                 if self._full_transcripts_enabled
@@ -297,7 +302,7 @@ class LiveAIManager:
     ) -> dict[str, Any]:
         async with self._lifecycle_lock:
             self._stop_requested = False
-            avail = self._availability()
+            avail = await self._check_availability()
             if not avail.get("available"):
                 return {
                     "ok": False,
@@ -442,6 +447,9 @@ class LiveAIManager:
                     else "not_requested"
                 ),
             }
+
+    async def _check_availability(self) -> dict[str, Any]:
+        return self._availability()
 
     async def _prepare_provider(self) -> None:
         """Finish provider-specific cold-start work before call audio begins."""
@@ -675,6 +683,7 @@ class LiveAIManager:
             self._transcript_fragments.setdefault(direction, "")
         fragment = str(text or "")
         if fragment:
+            self._transcript_fragment_times.setdefault(direction, time.time())
             if direction == "input":
                 self._summary_fragment = self._merge_summary_fragment(
                     self._summary_fragment,
@@ -684,7 +693,7 @@ class LiveAIManager:
                 self._merge_transcript_fragment(
                     self._transcript_fragments[direction], fragment
                 )
-                if self._full_transcripts_enabled
+                if self._full_transcripts_enabled or self._memory_sink
                 else "[redacted]"
             )
             # Keep the current utterance intact until finalized. Providers may
@@ -703,7 +712,7 @@ class LiveAIManager:
             candidate = self._summary_fragment
             self._summary_fragment = ""
             self._consider_summary_candidate(candidate)
-        self.add_transcript(direction, text, metadata=metadata)
+        self.add_transcript(direction, text, metadata=metadata, timestamp=self._transcript_fragment_times.pop(direction, None))
 
     def flush_transcript_fragments(self) -> None:
         for direction in list(self._transcript_fragments):
@@ -715,21 +724,26 @@ class LiveAIManager:
         text: str,
         *,
         metadata: dict[str, Any] | None = None,
+        timestamp: float | None = None,
     ) -> None:
         clean_text = str(text or "").strip()
         if not clean_text:
             return
-        # Persist before the bounded in-memory display history truncates text.
+        # Both consumers see the same stable event before display truncation.
+        import uuid
+        event = {"event_id": uuid.uuid4().hex, "timestamp": time.time() if timestamp is None else timestamp,
+                 "session_id": self._session_id or self._last_session_id or "unknown",
+                 "provider": self.provider, "direction": direction,
+                 "text": clean_text, "metadata": metadata or {}}
+        if self._memory_sink:
+            try:
+                self._memory_sink(event)
+            except Exception as exc:
+                self._memory_capture_error = type(exc).__name__
         if self._full_transcripts_enabled and self._transcript_sink:
             try:
-                self._transcript_sink({
-                    "timestamp": time.time(),
-                    "session_id": self._session_id or self._last_session_id or "unknown",
-                    "provider": self.provider, "direction": direction,
-                    "text": clean_text, "metadata": metadata or {},
-                })
+                self._transcript_sink(event)
             except Exception as exc:
-                # A failed disk write must be visible without breaking call audio.
                 self._transcript_storage_error = type(exc).__name__
         if len(clean_text) > self._transcript_text_limit:
             clean_text = clean_text[-self._transcript_text_limit :]
@@ -739,7 +753,7 @@ class LiveAIManager:
         session_id = self._session_id or self._last_session_id or "unknown"
         retained_text = clean_text if self._full_transcripts_enabled else "[redacted]"
         event = TranscriptEvent(
-            timestamp=time.time(),
+            timestamp=event["timestamp"],
             session_id=session_id,
             provider=self.provider,
             direction=direction,

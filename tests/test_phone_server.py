@@ -15,7 +15,7 @@ async def test_controller_reconnect_supplies_idempotency_identity(monkeypatch):
 
     monkeypatch.setattr(server, "ensure_phone_connected", connect)
     monkeypatch.setattr(
-        server, "_runtime_config", SimpleNamespace(device_address="AA:BB:CC:DD:EE:FF")
+        server, "_runtime_config", SimpleNamespace(device_address="AA:BB:CC:DD:EE:FF", full_transcripts=False)
     )
     controller = server._create_phone_controller(RoutingConfig.parse(routing_data()))
     await controller.connect()

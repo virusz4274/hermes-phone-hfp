@@ -16,6 +16,10 @@ from .security import load_or_create_token
 from .contracts import CALLER_BINDING_TTL_SECONDS
 
 
+class NoteConflict(ValueError):
+    """The supplied note revision is stale; read and merge again."""
+
+
 class CallerStore:
     def __init__(self, path: Path):
         self.path = path
@@ -41,8 +45,18 @@ class CallerStore:
                 profile TEXT NOT NULL, caller_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS run_bindings (
                 run_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, root_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS note_versions (
+                profile TEXT NOT NULL, caller_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile, caller_id));
         """)
         self.db.commit()
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            columns = {r[1] for r in self.db.execute('PRAGMA table_info(bindings)')}
+            if 'started_at' not in columns:
+                self.db.execute('ALTER TABLE bindings ADD COLUMN started_at REAL')
+            if 'timezone' not in columns:
+                self.db.execute("ALTER TABLE bindings ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
         from .phone_tasks import TaskRegistry
         self.tasks = TaskRegistry(self)
 
@@ -60,8 +74,11 @@ class CallerStore:
         ttl: float,
         remember: bool = True,
         anonymous_identity: str | None = None,
+        timezone: str = 'UTC',
     ) -> dict:
         caller_id = self.caller_id(number) if number else (anonymous_identity or secrets.token_hex(16))
+        from zoneinfo import ZoneInfo
+        ZoneInfo(timezone)
         with self._lock, self.db:
             existing = self.db.execute(
                 "SELECT call_id FROM bindings WHERE session_id=?", (session_id,)
@@ -72,7 +89,7 @@ class CallerStore:
                 "DELETE FROM bindings WHERE expires < ?", (time.time() - 86400,)
             )
             self.db.execute(
-                "INSERT INTO bindings VALUES (?,?,?,?,?,?,?,1)",
+                "INSERT INTO bindings (session_id,call_id,profile,caller_id,policy,persistent,expires,active) VALUES (?,?,?,?,?,?,?,1)",
                 (
                     session_id,
                     call_id,
@@ -83,12 +100,17 @@ class CallerStore:
                     time.time() + ttl,
                 ),
             )
+            # Request leases for a call inherit its original date/timezone.
+            source = self.db.execute('SELECT started_at,timezone FROM bindings WHERE call_id=? AND profile=? AND caller_id=? AND started_at IS NOT NULL ORDER BY started_at LIMIT 1',
+                                     (call_id, profile, caller_id)).fetchone()
+            self.db.execute('UPDATE bindings SET started_at=?,timezone=? WHERE session_id=?',
+                            (*(source or (time.time(), timezone)), session_id))
         return self.binding(session_id)
 
     def binding(self, session_id: str) -> dict:
         with self._lock:
             row = self.db.execute(
-                "SELECT call_id,profile,caller_id,policy,persistent,expires,active FROM bindings WHERE session_id=?",
+                "SELECT call_id,profile,caller_id,policy,persistent,expires,active,started_at,timezone FROM bindings WHERE session_id=?",
                 (session_id,),
             ).fetchone()
         if not row or not row[6] or row[5] <= time.time():
@@ -99,6 +121,7 @@ class CallerStore:
             caller_id=row[2],
             policy=json.loads(row[3]),
             persistent=bool(row[4]),
+            started_at=row[7], timezone=row[8],
         )
 
     def renew(self, session_id: str, ttl: float = CALLER_BINDING_TTL_SECONDS) -> None:
@@ -123,33 +146,66 @@ class CallerStore:
             ).fetchone()
         return row[0] if row else ""
 
-    def update_for_session(self, session_id: str, note: str) -> None:
+    def snapshot(self, profile: str, caller_id: str) -> dict:
+        with self._lock:
+            row = self.db.execute("""SELECT
+                COALESCE((SELECT note FROM notes WHERE profile=? AND caller_id=?), ''),
+                COALESCE((SELECT revision FROM note_versions WHERE profile=? AND caller_id=?), 0),
+                COALESCE((SELECT generation FROM note_versions WHERE profile=? AND caller_id=?), 0)""",
+                (profile, caller_id) * 3).fetchone()
+            return dict(zip(("notes", "revision", "generation"), row))
+
+    def update_for_session(self, session_id: str, note: str, *, expected_revision=None) -> None:
         if not isinstance(note, str) or len(note) > 8000:
             raise ValueError("caller note must be text of at most 8000 characters")
         with self._lock, self.db:
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
             binding = self.binding(session_id)
             if not binding["persistent"]:
                 raise PermissionError(
                     "persistent caller memory is disabled for this call"
                 )
-            self.replace_notes(binding["profile"], binding["caller_id"], note)
+            if binding['started_at'] is None:
+                raise PermissionError('legacy binding lacks call provenance; start a new call')
+            from .note_text import prepare_replacement
+            old = self.read(binding['profile'], binding['caller_id'])
+            note = prepare_replacement(old, note, binding)
+            self.replace_notes(binding["profile"], binding["caller_id"], note, expected_revision=expected_revision)
 
-    def replace_notes(self, profile: str, caller_id: str, note: str) -> None:
+    def replace_notes(self, profile: str, caller_id: str, note: str, *, expected_revision=None) -> None:
         """Storage primitive; callers must authorize the resolved caller/profile."""
         if not isinstance(note, str) or len(note) > 8000:
             raise ValueError("caller note must be text of at most 8000 characters")
         with self._lock, self.db:
-            self.db.execute(
-                "INSERT INTO notes VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET note=excluded.note, updated=excluded.updated",
-                (profile, caller_id, note, time.time()),
-            )
+            self._replace_notes(profile, caller_id, note, expected_revision=expected_revision)
+
+    def _replace_notes(self, profile, caller_id, note, *, expected_revision=None):
+        """Transaction-internal write, also used by atomic closeout commits."""
+        if not isinstance(note, str) or len(note) > 8000:
+            raise ValueError("caller note must be text of at most 8000 characters")
+        if not self.db.in_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        current = self.snapshot(profile, caller_id)
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision != current["revision"]):
+            raise NoteConflict("notes changed; read the latest notes and merge again")
+        self.db.execute(
+            "INSERT INTO note_versions VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET revision=excluded.revision",
+            (profile, caller_id, current["revision"] + 1, current["generation"]))
+        self.db.execute(
+            "INSERT INTO notes VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET note=excluded.note, updated=excluded.updated",
+            (profile, caller_id, note, time.time()))
 
     def forget(self, profile: str, caller_id: str) -> None:
         with self._lock, self.db:
-            self.db.execute(
-                "DELETE FROM notes WHERE profile=? AND caller_id=?",
-                (profile, caller_id),
-            )
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
+            old = self.snapshot(profile, caller_id)
+            self.db.execute("INSERT INTO note_versions VALUES (?,?,?,?) ON CONFLICT(profile,caller_id) DO UPDATE SET revision=excluded.revision,generation=excluded.generation",
+                            (profile, caller_id, old["revision"] + 1, old["generation"] + 1))
+            self.db.execute("DELETE FROM notes WHERE profile=? AND caller_id=?", (profile, caller_id))
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='memory_closeouts'").fetchone():
+                self.db.execute("DELETE FROM memory_closeouts WHERE profile=? AND caller_id=?", (profile, caller_id))
 
     def close(self):
         self.db.close()

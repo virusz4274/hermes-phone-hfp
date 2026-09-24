@@ -300,7 +300,13 @@ class RequestLedger:
             ).fetchone()
         if row is None:
             return None
+        memory = None
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
+                saved = self._db.execute("SELECT data FROM call_memory_runs WHERE call_id=?", (call_id,)).fetchone()
+                memory = json.loads(saved[0]).get("result") if saved else None
         return {
+            **({"memory_save": memory} if memory else {}),
             "call_id": call_id,
             "caller_number": row[0],
             "role": row[1],
@@ -320,6 +326,9 @@ class RequestLedger:
             ):
                 cursor = self._db.execute(f"DELETE FROM {table} WHERE {column} < ?", (cutoff,))
                 counts += max(0, cursor.rowcount)
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
+                self._db.execute("DELETE FROM call_memory_runs WHERE json_extract(data,'$.updated_at')<? "
+                                 "AND COALESCE(json_extract(data,'$.receipt.deadline'),0)<?", (cutoff, time.time()))
             self._db.execute("DELETE FROM call_transcript WHERE "
                 "(conversation_id IS NULL AND created_at<?) OR conversation_id IN "
                 "(SELECT id FROM phone_conversations WHERE archived_at<?)",

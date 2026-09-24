@@ -117,6 +117,82 @@ identity verification is planned; the Bluetooth-number decision above applies.
 
 ### First: dependable memory and reporting
 
+Implemented closeout portion (automated tests and live saves verified;
+delivery/RAM recall acceptance still pending):
+
+- [x] Automatic extraction of permitted facts, decisions, and commitments from
+  call transcription, including the final available words after hangup.
+- [x] Dated additions to existing notes, revision conflicts for replacement
+  writes, atomic duplicate receipts, checkpoints, and bounded restart recovery.
+- [x] Save outcomes in existing status and call summaries; respect memory policy,
+  caller permissions, and forgetting without reviving caller bindings.
+- [x] Preserve enabled detailed transcripts alongside notes and retain existing
+  transcript settings and expiry rules.
+- [ ] Validate delivery/RAM closeout and subsequent detailed recall on a live call.
+
+### Current branch: finish memory quality and recall
+
+Scope for `codex/call-memory-finalization`: finish the memory fixes below.
+The already installed SDK warmup and timing diagnostics remain in place; further
+audio tuning and reminder execution belong to the deferred work below.
+
+Implementation constraint: keep system-prompt changes minimal. Consolidate
+redundant or conflicting instructions instead of appending another policy block.
+Enforce dates/provenance, merging, duplicate prevention, and permissions in code;
+use concise tool descriptions/results for operational details. Add behavioral
+guidance only where needed for natural conversation and honest recall.
+The live prompt has now been consolidated from 779 to 339 words for normal
+continuity-enabled calls (excluding caller data and tool schemas). Repeated
+context/tool instructions were trimmed, and conditional hangup wording made
+consistent. Behavioral acceptance on another call remains open; this prompt
+refinement is complemented by the code-level memory-quality fixes below.
+
+- [ ] **Natural use of memory.** Begin incoming calls with a normal greeting.
+  Use caller facts quietly when relevant; do not open by asking whether the call
+  is about notes or expose storage/tool details unnecessarily. Honor the caller's
+  saved preference to consult notes when needed or requested.
+- [ ] **Accurate recall claims.** Use permitted current notes and retained
+  transcripts for memory questions. Do not claim history is unavailable merely
+  because notes are empty, or generalize one lookup failure into no access.
+  Distinguish empty results, disabled persistence, expired history, and errors.
+- [x] **Useful, appropriately qualified updates.** Save meaningful facts,
+  decisions, preferences, and commitments. Avoid promoting isolated, ambiguous
+  recognition fragments or assistant-capability discussion into lasting facts.
+  Preserve uncertainty and distinguish a requested callback from a confirmed
+  scheduled action; recording a request must not execute it. Extraction now
+  requires exact caller evidence, confidence, and relevance. Short-term plans
+  remain relevant; unclear topic shifts are marked uncertain. Semantic
+  classification still depends on the model and is not an ASR accuracy guarantee.
+- [x] **Trusted dates and provenance.** Attach new updates to the actual bound
+  call and its date/timezone in code. Preserve older facts' original provenance;
+  never accept a model-invented call ID as authoritative. Apply this to explicit
+  note updates as well as automatic closeout.
+- [x] **Clean merging and existing-note review.** Prevent repeated fact prefixes,
+  repeated due-date labels, and duplicate updates without erasing unrelated
+  facts or dated corrections. Review affected existing entries against retained
+  transcripts; repair verifiable metadata/formatting errors and flag ambiguous
+  content for confirmation rather than silently rewriting what the caller said.
+  Keep the original transcripts available and unchanged. Reviewed three affected
+  caller records against their own retained transcripts: corrected a fabricated
+  source, dated the legacy delivery/RAM update, normalized repeated labels, and
+  flagged unclear fragments without guessing their intended wording.
+- [ ] **Focused acceptance.** Verify natural greeting, accurate notes/transcript
+  recall, dated delivery/RAM updates after abrupt hangup, concurrent merging,
+  duplicate-save prevention, save failure reporting, and the existing
+  `remember: false`, caller/profile isolation, and revocation rules. Do not mark
+  the remaining live acceptance complete based only on unit tests.
+
+Evidence from the 2026-09-22 20:19/21:18 IST calls: six/three dated updates
+saved successfully, but voice brought up notes unprompted and incorrectly denied
+other call history. An isolated recognition fragment became a durable fact,
+some entries duplicated renderer labels, and a direct note update included a
+source call ID absent from the ledger/bindings. These are memory-branch defects.
+
+### Deferred: broader memory reporting and task workflows
+
+The broader items below remain open where they require owner notification delivery,
+full reporting workflows, historical queries, or task integrations.
+
 - [ ] **Reliable call closeout and owner report.** Save useful updates even when
   the caller hangs up before an agent-initiated save finishes, with explicit
   success/failure and duplicate prevention. Preserve existing facts and prevent
@@ -147,7 +223,47 @@ identity verification is planned; the Bluetooth-number decision above applies.
   Recording a promise must not silently create a reminder, payment, booking, or
   another external action outside the owner's instructions and route permissions.
 
-### Next: useful office workflows
+### Deferred: voice latency, reminders, and office workflows
+
+- [ ] **Greeting startup latency.** Investigate the 2026-09-22 10:02 IST
+  incoming call: voice ready after 6.413 seconds, then another 9.829 seconds
+  before the first Gemini audio; forwarding that audio to HFP took 21 ms.
+  Instrument answer/active, conversation setup, audio acquisition, first speech,
+  and speech-end timing to distinguish setup, lost early speech, turn detection,
+  and model response time. Verify an incoming greeting without requiring repeated
+  hellos, while preserving the recipient-first behavior of outgoing calls.
+  Diagnosis: `LiveAIManager.start()` calls Gemini `availability()` synchronously
+  after answering. Its `_google_genai_capable()` imports the Google SDK on the
+  event-loop thread. An offline fresh-process reproduction on the phone host
+  took 4,158 ms cold versus 7 ms warm, blocking a 100 ms heartbeat for 4,180 ms;
+  this matches the call's four-second task-poll/renewal gap before SCO startup.
+  Preload/check the SDK before accepting calls and keep blocking preparation off
+  the event loop. The remaining 9.814 seconds from first submitted input to first
+  model audio cannot be assigned precisely from this call's records: input is
+  not timestamped by speech boundaries. Startup retains only 100 ms of queued
+  input and there is no explicit incoming greeting trigger, so early speech loss
+  and waiting for another utterance must be tested, not assumed proven.
+  SDK preloading before Bluetooth/call admission and off-thread availability
+  checks are now implemented. Startup diagnostics record answer/active/context
+  stages, captured versus submitted signal activity (RMS, not speech detection),
+  queue loss before provider readiness, and first transcription/provider/audio
+  events. Physical test on 2026-09-22 at 11:12 IST: caller reported a fast
+  greeting. Voice setup fell from 6,413 ms to 2,216 ms; call-time dependency
+  checks took 15 ms. First audio reached HFP about 5.15 seconds after controller
+  startup (previously 16.26 seconds), including the caller's greeting. Model
+  audio arrived about 1.25 seconds after submitted signal activity ended. This
+  verifies the cold-start improvement; RMS activity is not speech recognition.
+  Greeting/queue behavior is unchanged. This test's detected first activity
+  occurred after provider readiness; immediate speech during connection still
+  needs a separate test before declaring startup input-loss handling complete.
+  Later-call review (2026-09-22): incoming calls at 20:19 and 21:18 IST still
+  took about 10.1 and 10.9 seconds from controller startup to first playback,
+  despite 12 ms dependency checks and 2.39/1.97 second voice setup. At 20:19,
+  captured/submitted activity shows two short utterances, with a response about
+  1.42 seconds after the second ended. At 21:18, the first model audio followed
+  the last initial submitted activity by 7.04 seconds. No reconnects or dropped
+  playback frames; first playback lag was 10/33 ms. Investigate input turn
+  detection and provider response latency; the cold SDK fix alone is insufficient.
 
 - [ ] **Scheduled reminders and follow-ups.** Complete and test owner-authorized
   workflows such as “Call me before the meeting” and “Call him Friday to check
@@ -157,6 +273,21 @@ identity verification is planned; the Bluetooth-number decision above applies.
   configured calling hours and avoid duplicate calls after restart. Report busy,
   unanswered, disconnected, or uncertain outcomes; retries require an explicit
   owner policy and a bounded schedule, not uncontrolled automatic redialing.
+  Confirmed failure on 2026-09-22: the phone-requested 20-minute reminder was
+  created with `deliver: origin` (the phone's `api_server` session), due at
+  10:24:06 IST. It ran and generated reminder text, but delivery failed because
+  that adapter supports HTTP request/response, not notification sends. Gemini
+  nevertheless promised Telegram delivery. A separate reminder branch must
+  resolve and persist an authorized delivery destination, distinguish job
+  creation from delivery success, surface failures, and test a reminder after
+  hangup and gateway restart. Do not default a phone reminder to its API origin
+  or claim Telegram/callback delivery without a confirmed destination.
+  Later failures at 20:23 and 21:19 IST: both callback setup tasks were cancelled
+  at hangup with `continue_after_call: false`, before any scheduler job was
+  created. One caller explicitly conditioned hangup on callback confirmation,
+  but the voice ended the call while setup was still pending. Preserve that
+  condition, distinguish pending setup from a confirmed schedule, and honor
+  permitted task continuation without reusing expired call authority.
 
 - [ ] **Contact names and useful context.** Let the owner associate names,
   nicknames, company/project, preferred language, and calling hours with a number,

@@ -38,7 +38,7 @@ flowchart LR
 - Map your number to your personal profile with admin permissions and normal Hermes approvals.
 - Map known callers to profiles with explicitly allowed caller-aware tools.
 - Configure a guest default if you want unknown callers answered; otherwise they are declined.
-- Keep caller notes across calls without sharing them with other callers.
+- Automatically save dated caller facts, decisions, and commitments after hangup, with duplicate protection and a visible save result. Keep enabled transcripts for detailed recall.
 - Choose `gemini_live` for native voice or `classic` for the profile's STT/TTS providers. Classic can also be an explicit Gemini startup fallback.
 
 Profiles are optional: one personal profile is enough to start. The installer does not create profiles. Routing, permissions, auto-answer and voice selection live in one `phone` YAML section. See [Configuration and operations](docs/phone-routing.md) for additional profiles, caller memory, approvals and integration development.
@@ -50,7 +50,7 @@ Hermes Phone cleanly separates concerns across four layers:
 ### 1. Owner Phone Controls (`hfp_phone` toolset)
 Available in your Hermes owner chat channels (e.g. Telegram, Discord, CLI) to control telephone operations:
 - `hfp_phone_start_call`: Initiate an outbound phone call through the paired handset to a specified number.
-- `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first for remembered facts and call summaries; consult transcripts when notes are insufficient or exact dialogue is requested.
+- `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first and supply the returned revision as `expected_revision` when replacing them. For remembered facts and call summaries, use notes first; consult transcripts when notes are insufficient or exact dialogue is requested.
 - `hfp_phone_status`: Inspect live Bluetooth connection, active call state, and routing status.
 - `hfp_phone_transcripts`: List past phone calls or read detailed transcripts when full transcript retention is enabled.
 - `hfp_phone_approval`: Explicitly approve (`once`) or deny (`deny`) pending tool execution requests prompted by in-call tasks.

@@ -33,7 +33,7 @@ async def test_gateway_notes_shared_with_bindings_and_isolated(tmp_path, monkeyp
         assert (await client.post("/v1/hfp/caller-notes/read", json={"number": NUMBER})).status == 401
         async def notes(action, **body):
             return await client.post("/v1/hfp/caller-notes/" + action, json=body, headers=headers)
-        saved = await notes("update", number="9876543210", notes="Prefers afternoon meetings")
+        saved = await notes("update", number="9876543210", notes="Prefers afternoon meetings", expected_revision=0)
         assert saved.status == 200
         assert (await saved.json())["number"] == NUMBER
         bound = await client.post("/v1/hfp/bindings", headers=headers, json={
@@ -91,9 +91,9 @@ def test_owner_http_proxy_normalizes_and_routes(monkeypatch):
     runtime = HttpRuntime(None, lambda: None, lambda: SimpleNamespace(config=config), lambda: None,
                           lambda: None, lambda: {}, lambda: {}, None)
     with HttpClient(Starlette(routes=control_routes(None, runtime))) as client:
-        response = client.post("/v1/phone/caller-notes/update", json={"number": "9876543210", "notes": "new"})
+        response = client.post("/v1/phone/caller-notes/update", json={"number": "9876543210", "notes": "new", "expected_revision": 0})
         assert response.status_code == 200
-        assert seen == ["default", (NUMBER, {"notes": "new"}), "closed"]
+        assert seen == ["default", (NUMBER, {"notes": "new", "expected_revision": 0}), "closed"]
         assert client.post("/v1/phone/caller-notes/update", json={"number": NUMBER, "notes": None}).status_code == 400
         assert client.post("/v1/phone/caller-notes/read", json={"number": "+919876543211"}).status_code == 403
         assert client.post("/v1/phone/caller-notes/read", json={"number": NUMBER, "profile": "guest"}).status_code == 400

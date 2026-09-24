@@ -144,12 +144,14 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             body = await request.json()
             if not isinstance(body, dict) or not isinstance(body.get("number"), str):
                 raise ValueError("number must be text")
-            if set(body) - {"number", "notes"}:
+            if set(body) - {"number", "notes", "expected_revision"}:
                 raise ValueError("unexpected caller notes argument")
             update = request.path_params["action"] == "update"
             notes = body.get("notes")
             if update and (not isinstance(notes, str) or len(notes) > 8000):
                 raise ValueError("notes must be text of at most 8000 characters")
+            if update and type(body.get("expected_revision")) is not int:
+                raise ValueError("expected_revision from a notes read is required")
             controller = runtime.controller()
             routing = controller.config if controller else RoutingConfig.load()
             number = normalize_phone_number(body["number"], routing.region)
@@ -160,14 +162,14 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
                 return JSONResponse({"error": "persistent caller memory is disabled"}, status_code=403)
             api = HermesAPI(routing.endpoints[route.endpoint])
             try:
-                return JSONResponse(await api.caller_notes(number, **({"notes": notes} if update else {})))
+                return JSONResponse(await api.caller_notes(number, **({"notes": notes, "expected_revision": body["expected_revision"]} if update else {})))
             finally:
                 await api.close()
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            return JSONResponse({"error": "caller notes request rejected"}, status_code=code if code in {400, 403} else 502)
+            return JSONResponse({"error": "caller notes request rejected"}, status_code=code if code in {400, 403, 409} else 502)
         except httpx.TransportError:
             return JSONResponse({"error": "caller notes unavailable; update outcome may be unconfirmed"}, status_code=502)
 

@@ -50,6 +50,10 @@ class ClassicVoice:
         self.utterances = asyncio.Queue(maxsize=8)
         self.sentences = asyncio.Queue(maxsize=4)
         self.epoch = 0
+        self.tail_audio = b""
+        self.transcribing_pcm = None
+        self.speech_times = {}
+        self.transcribing_at = None
 
     async def start(self, call_id, context):
         import aiohttp
@@ -74,6 +78,27 @@ class ClassicVoice:
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        # Audio already received before hangup can still yield the last caller words.
+        pending = []
+        if self.transcribing_pcm:
+            pending.append((self.transcribing_pcm, self.transcribing_at))
+            self.transcribing_pcm = None
+        while not self.utterances.empty():
+            pcm, epoch = self.utterances.get_nowait()
+            pending.append((pcm, self.speech_times.pop(epoch, None)))
+        if len(self.tail_audio) >= 4800:
+            pending.append((self.tail_audio, self.speech_times.get(self.epoch)))
+        self.tail_audio = b""
+        if pending and getattr(self.controller, "memory_capture", None):
+            try:
+                async with asyncio.timeout(25):
+                    for pcm, stamp in pending:
+                        result = await self.controller.api.request("POST", "v1/hfp/speech/transcribe", bridge=True,
+                            content=pcm, headers={"Content-Type": "application/octet-stream"})
+                        if result.get("text", "").strip():
+                            self.controller.record_transcript("input", result["text"].strip(), timestamp=stamp)
+            except Exception:
+                self.controller.memory_capture.data['capture_complete'] = False
         if self.ws:
             await self.ws.close()
         if self.http:
@@ -102,6 +127,7 @@ class ClassicVoice:
             if level >= 200:
                 if not speech:
                     self.epoch += 1
+                    self.speech_times[self.epoch] = time.time()
                     if self.turn_task:
                         self.turn_task.cancel()
                     await self.clear(self.stream_id)
@@ -119,6 +145,7 @@ class ClassicVoice:
                     # A full queue fails visibly instead of silently losing requests.
                     self.utterances.put_nowait((bytes(speech), self.epoch))
                 speech.clear()
+            self.tail_audio = bytes(speech)
 
     async def turns(self):
         while True:
@@ -136,6 +163,8 @@ class ClassicVoice:
 
     async def handle_turn(self, pcm, epoch):
         api = self.controller.api
+        self.transcribing_pcm = pcm
+        self.transcribing_at = self.speech_times.pop(epoch, time.time())
         result = await api.request(
             "POST",
             "v1/hfp/speech/transcribe",
@@ -144,9 +173,11 @@ class ClassicVoice:
             headers={"Content-Type": "application/octet-stream"},
         )
         text = result.get("text", "").strip()
+        if text:
+            self.controller.record_transcript("input", text, timestamp=self.transcribing_at)
+        self.transcribing_pcm = None
         if not text or epoch != self.epoch:
             return
-        self.controller.record_transcript("input", text)
         buffer, emitted = "", False
         async with aclosing(self.controller.events(text, uuid.uuid4().hex)) as events:
             async for event in events:

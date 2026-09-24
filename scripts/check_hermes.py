@@ -35,7 +35,7 @@ async def exercise():
     from gateway.config import PlatformConfig
     from gateway.platforms.api_server import APIServerAdapter
     from hfp_mcp import hermes_bridge, hermes_sessions
-    from hfp_mcp.hermes_compat import native_readiness, REQUIRED_RUN_FEATURES
+    from hfp_mcp.hermes_compat import native_readiness, memory_readiness, REQUIRED_RUN_FEATURES
 
     home = Path(os.environ["HERMES_HOME"])
     config = {
@@ -82,6 +82,7 @@ async def exercise():
     adapter = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": "a" * 40}))
     assert native_readiness(adapter)["sessions"]
     assert native_readiness(adapter)["compaction"]
+    assert memory_readiness(adapter)
     request = make_mocked_request(
         "GET", "/v1/capabilities", headers={"Authorization": "Bearer " + "a" * 40}
     )

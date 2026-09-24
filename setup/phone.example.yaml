@@ -5,6 +5,7 @@ phone:
   # Routing schema version, not the hfp-mcp package version.
   version: 1
   default_region: IN
+  # timezone: Asia/Kolkata  # Dated call notes; defaults to the host timezone.
   auto_answer: true
   auto_reconnect: false
   max_phone_tasks: 2  # Includes tasks continuing after hangup; no queue.
