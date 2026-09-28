@@ -26,6 +26,7 @@ class HttpRuntime:
     transcript: Callable
     transcripts: Callable
     start_call: Callable
+    callbacks: Callable = lambda: None
 
 
 def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
@@ -101,7 +102,60 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             else {"enabled": False}
         )
         state["native_phone_tasks"] = await _gateway_phone_tasks("owner_status")
+        scheduler = runtime.callbacks()
+        state["scheduled_callbacks"] = scheduler.list(include_terminal=False) if scheduler else []
+        state['recent_callbacks'] = [r for r in scheduler.list() if r['status'] not in {'scheduled', 'firing'}][-10:] if scheduler else []
         return JSONResponse(state)
+
+    async def _phone_callbacks(request):
+        scheduler = runtime.callbacks()
+        if scheduler is None:
+            return JSONResponse({"error": "phone callback scheduler unavailable"}, status_code=409)
+        if request.method == "GET":
+            return JSONResponse({"callbacks": scheduler.list()})
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("expected an object")
+            if not all(isinstance(body.get(key), str) for key in ("number", "request_id", "purpose")):
+                raise ValueError("number, request_id and purpose must be text")
+            controller = runtime.controller()
+            if controller is None:
+                return JSONResponse({'error': 'phone controller disabled'}, status_code=409)
+            route, reason = controller.config.resolve_outbound(body['number'])
+            if not route:
+                return JSONResponse({'error': reason}, status_code=403)
+            if config and config.self_number and normalize_phone_number(body['number'], controller.config.region) == normalize_phone_number(config.self_number, config.default_region):
+                return JSONResponse({'error': 'outbound target matches the configured paired-handset number'}, status_code=403)
+            callback = scheduler.schedule(
+                request_id=body["request_id"], number=body["number"],
+                purpose=body["purpose"], run_at=body.get("run_at"),
+            )
+            runtime.sync_state()
+            connection = runtime.state.versioned_snapshot().get('connection', {}).get('state')
+            return JSONResponse({"ok": True, "callback": callback,
+                                 'warning': None if connection == 'connected' else
+                                 'Callback saved. Bluetooth/HFP must be ready at the due time; delivery is not guaranteed.'})
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def _callback_control(request):
+        scheduler = runtime.callbacks()
+        if scheduler is None:
+            return JSONResponse({'error': 'phone callback scheduler unavailable'}, status_code=409)
+        try:
+            key = request.path_params['callback_id']
+            if request.path_params['action'] == 'cancel':
+                return JSONResponse({'ok': True, 'callback': scheduler.cancel(key)})
+            if request.path_params['action'] != 'reminder':
+                raise ValueError('unknown callback action')
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError('expected an object')
+            scheduler.link_reminder(key, body.get('job_id'))
+            return JSONResponse({'ok': True})
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({'error': str(exc)}, status_code=400)
 
     async def _transcripts(request):
         try:
@@ -273,6 +327,8 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         Route("/v1/phone/transcripts", _transcripts, methods=["GET"]),
         Route("/v1/phone/transcripts/calls", _transcript_calls, methods=["GET"]),
         Route("/v1/phone/calls", _phone_start, methods=["POST"]),
+        Route("/v1/phone/callbacks", _phone_callbacks, methods=["GET", "POST"]),
+        Route('/v1/phone/callbacks/{callback_id}/{action}', _callback_control, methods=['POST']),
         Route("/v1/phone/approval", _phone_approval, methods=["POST"]),
         Route("/v1/state", _state_endpoint, methods=["GET"]),
         Route("/status", _legacy_status_endpoint, methods=["GET"]),

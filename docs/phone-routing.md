@@ -244,12 +244,47 @@ reported as remembered.
 
 For “call me to remind me about my meeting,” use the configured owner destination
 and include the meeting title, time/timezone, and relevant details in the brief.
-For a future reminder, use Hermes's existing scheduler: its job must retain the
-destination and a self-contained brief, then invoke the same outgoing tool when
-due. Scheduling and calendar integrations remain Hermes capabilities; this plugin
-does not add a scheduler or automatically monitor calendars. The destination must
-differ from the paired handset's own SIM number, which remains blocked from
-self-calling. Cached incoming greetings are separate from this workflow.
+For a future **phone** reminder, the owner-facing `hfp_phone_schedule_call` tool persists a
+one-shot callback in the HFP daemon and creates a Telegram reminder card through
+Hermes's scheduler. The daemon owns the future dial, so the callback survives a
+Hermes gateway restart and does not depend on an unauthenticated cron session.
+The destination must differ from the paired handset's own SIM number, which
+remains blocked from self-calling. A failed or uncertain dial is recorded and is
+never retried automatically. Cached incoming greetings are separate from this
+workflow.
+
+For a text reminder, `hfp_phone_schedule_reminder` creates a native Hermes cron
+job delivered to the configured Telegram home channel, even when the request
+arrived through a phone/API session. It does not depend on Bluetooth. Both tools
+accept exactly one of `delay_minutes`, `delay_seconds`, or an ISO-8601 `run_at`
+with a timezone offset. Resolve date, AM/PM, timezone, and reminder lead time
+before scheduling (for example, a 10:30 appointment with a 10-minute reminder
+needs a 10:20 schedule). Native cron polling and model execution may delay a
+Telegram message past the target time; it is not an exact-time alarm. The
+"card" is a Telegram reminder message, not a separate interactive card UI.
+
+Live calls should submit scheduling and independent work with
+`continue_after_call=true` when the admin policy permits background tasks.
+This lets Hermes finish saving the schedule after hangup, within the configured
+background-task time limit. Once saved, the schedule has its own lifetime.
+A pending task is not a confirmed schedule. Without continuation permission,
+the caller must wait for the saved schedule before hanging up.
+
+Saving appointment facts in caller notes does not create a calendar event or a
+reminder. Actual bookings use the profile's configured calendar tools; each
+requested action needs its own successful tool result. Nothing automatically
+scans remembered appointment facts and turns them into schedules.
+
+`hfp_phone_status` includes pending callbacks and the ten most recent terminal
+outcomes. `hfp_phone_cancel_callback` cancels a pending callback and pauses its
+linked Telegram job. A firing call cannot be cancelled this way. For a changed
+time, cancel successfully before creating a replacement; manage standalone
+reminders with native `cronjob_manage`. Report partial cancellation failures.
+Calls more than five minutes overdue after downtime are marked failed instead
+of being dialled late. A successful callback result means voice became ready,
+not that the user heard the entire reminder. Callback/card creation is not an
+atomic transaction: report partial failures and keep returned IDs rather than
+automatically resubmitting both actions.
 
 ### Notes from owner chat
 

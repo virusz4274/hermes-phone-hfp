@@ -57,6 +57,7 @@ from .audio.sidecar import (
     AudioStreamServer,
     StreamGrant,
 )
+from .callbacks import CallbackScheduler
 from .bluez.agent import HFPAgent, register_agent, unregister_agent
 from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile, unregister_hfp_profile
@@ -191,6 +192,7 @@ _media_leases = MediaLeaseManager()
 _audio_stream_server: AudioStreamServer | None = None
 _gemini_live_manager: GeminiLiveManager | None = None
 _phone_controller = None
+_callback_scheduler: CallbackScheduler | None = None
 _gemini_allowed_tools: frozenset[str] | None = None
 _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
@@ -3628,6 +3630,7 @@ def create_http_app(
         audio_server=lambda: _audio_stream_server,
         transcript=get_call_transcript, transcripts=list_call_transcripts,
         start_call=start_phone_call,
+        callbacks=lambda: _callback_scheduler,
     )
     app.router.routes.extend(control_routes(config, runtime))
     app.add_middleware(
@@ -3644,7 +3647,7 @@ def create_http_app(
 
     @asynccontextmanager
     async def _app_lifespan(starlette_app):
-        global _phone_controller
+        global _phone_controller, _callback_scheduler
         from .routing import RoutingConfig
         routing = RoutingConfig.load() if start_bluetooth else RoutingConfig()
         if routing.enabled and any(route and route.voice == "gemini_live" for route in
@@ -3660,10 +3663,19 @@ def create_http_app(
         if start_bluetooth and routing.enabled:
             _phone_controller = _create_phone_controller(routing)
             _phone_controller.start()
+            _callback_scheduler = CallbackScheduler(
+                config.database_file,
+                start_phone_call,
+                region=routing.region,
+            )
+            await _callback_scheduler.start()
         try:
             async with session_lifespan(starlette_app):
                 yield
         finally:
+            if _callback_scheduler:
+                await _callback_scheduler.close()
+                _callback_scheduler = None
             if _phone_controller:
                 await _phone_controller.close()
                 _phone_controller = None
