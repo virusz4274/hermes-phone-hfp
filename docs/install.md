@@ -3,9 +3,26 @@
 This guide installs Hermes Phone from a fresh checkout on one Linux machine. Run commands from the repository root as the user who will own the phone service. Use `sudo` only for the Bluetooth installer.
 
 ```bash
-git clone https://github.com/virusz4274/hermes-phone-hfp.git
+git clone --branch main https://github.com/virusz4274/hermes-phone-hfp.git
 cd hermes-phone-hfp
 ```
+
+`main` is the reviewed public preview branch; `development` contains ongoing
+integration work. Following `main` does not imply production readiness.
+
+To pin an installation to a published release instead, fetch tags and check out
+its exact tag before running either installer:
+
+```bash
+git fetch origin --tags
+git switch --detach <published-release-tag>
+```
+
+For this candidate the planned tag is `v0.1.1rc1`; use it only after it appears on
+the repository's [Releases page](https://github.com/virusz4274/hermes-phone-hfp/releases).
+Preparing or merging the release PR does not itself publish that tag. Branch-based
+installations can continue using `main`; a tag simply pins a reproducible revision.
+Updates remain manual; see [Maintenance](maintenance.md).
 
 Use the reviewed preview revision or release source archive. The wheel contains
 the runtime; the checkout/source archive also includes host setup and plugin files.

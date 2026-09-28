@@ -72,7 +72,7 @@ async def exercise():
         HFP_MCP_CONFIG=str(routing), TEST_API="a" * 40, TEST_BRIDGE="b" * 40
     )
     manager = PluginManager(scope_key=str(home))
-    manifest = PluginManifest(name="hfp-phone", version="0.1.0rc1", source="user")
+    manifest = PluginManifest(name="hfp-phone", version="0.1.1rc1", source="user")
     manager._plugins["hfp-phone"] = LoadedPlugin(manifest=manifest, enabled=True)
     context = PluginContext(manifest, manager)
     hermes_bridge.register(context)

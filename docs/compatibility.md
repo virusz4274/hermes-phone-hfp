@@ -5,8 +5,8 @@ establish support for every Bluetooth adapter or handset.
 
 | Component | Preview target | Evidence / limitation |
 | --- | --- | --- |
-| Python | 3.11–3.13 | CI matrix; local release validation uses 3.13 |
-| Hermes | `819988acb750836387fbb9d5d76203a9b3f530f4` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
+| Python | 3.11–3.13 | Supported range; current CI tests 3.13 only; local validation uses 3.13 |
+| Hermes | `130b8f2c5dbca93a81aa396dd2ba44420d78f6f0` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
 | MCP SDK | 1.x, >=1.27 | Daemon extra only; MCP 2 renamed FastMCP and is not a daemon target |
 | Bluetooth host | Debian-family Linux, systemd; Raspberry Pi OS Bookworm/Trixie | Installer targets; fresh-machine validation is required on each platform |
 | Phone / Bluetooth controller | HFP Audio Gateway + SCO over HCI | No universal handset/adapter claim; publish results with model and OS versions |

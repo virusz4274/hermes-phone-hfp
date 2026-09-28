@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hfp-mcp"
-version = "0.1.0rc1"
+version = "0.1.1rc1"
 description = "Virtual phone call assistant for Hermes Agent over Bluetooth HFP with Gemini Live"
 readme = "README.md"
 license = "MIT"

@@ -58,7 +58,7 @@ def main():
                     """import importlib.util
 import hfp_mcp.hermes_bridge, hfp_mcp.phone_tasks, hfp_mcp.hermes_sessions
 from importlib.metadata import version
-assert version('hfp-mcp') == '0.1.0rc1'
+assert version('hfp-mcp') == '0.1.1rc1'
 for module in ('dbus', 'gi', 'mcp'):
     assert importlib.util.find_spec(module) is None, module
 """,
