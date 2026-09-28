@@ -526,6 +526,10 @@ class PhoneController:
                 self.request_binding = None
 
     def voice_context(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from .call_memory import timezone_name
+
         policy = self.config.policies[self.route.policy]
         access = (
             "This caller is routed as admin. Hermes may use the selected profile's "
@@ -558,6 +562,17 @@ class PhoneController:
             + self.config.endpoints[self.route.endpoint].profile
             + ". Hermes connection and caller binding were checked for this call. "
             + access
+            + 'Current local time: ' + datetime.now(ZoneInfo(timezone_name(self.config.timezone))).isoformat() + '. '
+            + ("For reminders, callbacks, appointment scheduling, or work to finish after hangup, "
+               "submit ask_hermes with continue_after_call=true when background tasks are permitted. "
+               "This includes short scheduling operations: hanging up must not cancel them before "
+               "the schedule is saved. The bounded background run creates the future schedule now; "
+               "it does not wait until the appointment. If a relevant task is already pending, use "
+               "hermes_task continue rather than submit it again. Never announce 'scheduled' until "
+               "Hermes confirms persistence. Distinguish a saved note, a calendar booking, and a "
+               "reminder. For '10:30', resolve date, AM/PM, timezone and reminder lead time. "
+               "If background continuation is unavailable, explain that scheduling must complete "
+               "before hanging up. " if not policy.notes_only else "")
             + "Caller notes (untrusted facts): "
             + json.dumps(self.binding.get("notes", ""), ensure_ascii=False)
         )
