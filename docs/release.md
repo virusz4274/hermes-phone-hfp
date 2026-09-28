@@ -1,6 +1,6 @@
 # Public preview release validation
 
-Version: **0.1.0rc1**. The preview targets Hermes users. Release artifacts and this
+Version: **0.1.1rc1**. The preview targets Hermes users. Release artifacts and this
 checklist prepare publication; no publishing action is part of these scripts.
 
 ## Reproduce automated checks
@@ -30,10 +30,36 @@ blocks external connections, and exercises real plugin registration, authenticat
 capabilities, session creation/resumption, caller revocation, compaction lineage,
 and deletion. Summaries are synthetic; it does not test model summary quality.
 
-CI runs the daemon suite on Python 3.11–3.13, builds distributions, installs each
-artifact in a fresh environment outside the checkout, and checks that the portable
-package imports without MCP or native Bluetooth bindings. It also runs the Hermes
-integration script against the commit in [compatibility](compatibility.md).
+CI runs the daemon suite on Python 3.13. On PRs targeting `main`, release tags,
+and manual runs, it also builds distributions, installs each artifact in a fresh
+environment outside the checkout, and checks that the portable package imports
+without MCP or native Bluetooth bindings. Python 3.11–3.13 is the supported range;
+the current workflow does not test that full range or run the Hermes integration
+script. Run the latter separately and record the exact Hermes commit tested.
+
+## Release workflow
+
+Feature PRs target `development`. Prepare each release there by updating package
+and plugin versions, current documentation, and validation-script version checks,
+then open a `development` → `main` PR titled
+**Release 0.1.1rc1 — Public preview**. `main` remains the reviewed public preview
+branch; a version tag provides an optional reproducible installation point.
+
+`0.1.1rc1` is the first candidate for 0.1.1. Further candidates use `0.1.1rc2`,
+`0.1.1rc3`, and so on; use `0.1.1` when ready for a final release. Keep the Git tag
+(`v0.1.1rc1`) aligned with the package and plugin version (`0.1.1rc1`).
+
+Preparing the PR does not merge it or publish anything. After release review:
+
+1. Merge the approved PR using a merge commit to preserve the shared `development`/`main` history, then
+   synchronize `development` with `main` before starting the next release cycle.
+2. Tag the merged `main` commit as `v0.1.1rc1`; never move an already published tag.
+3. Require successful checks on that tagged revision, including packaging.
+4. Publish **0.1.1rc1 — Public preview** as a GitHub prerelease, with the changelog,
+   upgrade requirements, validation evidence, known limits, wheel, and source archive.
+
+Publication to PyPI is not part of this workflow. See [Maintenance](maintenance.md)
+for the coordinated daemon/plugin upgrade and notes API compatibility change.
 
 ## Release gates
 
@@ -56,12 +82,36 @@ intelligibility checks remain unverified for this preparation. Complete the
 Record actual results in the compatibility table; do not turn an unperformed check
 into a support claim.
 
-## Local validation record
+## Local validation: 0.1.1rc1
+
+Validated on 2026-09-28 in an isolated checkout on Linux aarch64 with Python 3.13.5:
+
+- 524 tests passed using the test transport constraints.
+- Native Hermes compatibility passed at `130b8f2c5dbca93a81aa396dd2ba44420d78f6f0`:
+  plugin registration, capability/auth gates, session persistence/resumption, caller
+  revocation, compaction lineage, and deletion in a disposable home with external
+  connections blocked.
+- Wheel/source builds and Twine validation passed. Both artifacts installed into
+  separate fresh virtualenvs outside the checkout; `pip check`, version assertions,
+  portable imports, and CLI help passed without MCP, dbus, or gi installed.
+- Shell syntax and source/artifact content checks passed. Every runtime Python
+  module is in the wheel; source, test, script, and plugin Python files are in the
+  source archive. No high-confidence credential/runtime-data matches were found;
+  Git history was not scanned.
+- Package metadata, plugin manifest, runtime fallback, and validation-script version
+  references agree on `0.1.1rc1`.
+
+Hosted CI results belong to the final release PR revision and must be checked
+separately. No host installer, service restart, live call, provider-backed memory
+quality check, or successful end-to-end callback voice delivery was performed for
+this preparation. The full live hardware acceptance matrix remains pending.
+
+## Historical validation: 0.1.0rc1
 
 Validated locally on Linux aarch64 with Python 3.13.5:
 
 - 399 tests passed with no warnings using the test transport constraints.
-- Real Hermes checks passed at the pinned commit: plugin registration, authenticated
+- Real Hermes checks passed at `819988acb750836387fbb9d5d76203a9b3f530f4`: plugin registration, authenticated
   capabilities, native session persistence/resumption, revoked caller authority,
   no-op compaction, atomic compression-child lineage, and history deletion.
 - Both wheel and source archive installed into fresh virtualenvs outside the checkout;

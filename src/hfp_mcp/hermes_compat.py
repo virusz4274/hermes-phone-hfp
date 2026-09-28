@@ -88,3 +88,13 @@ def speech_readiness() -> dict:
         except (ImportError, AttributeError):
             pass
     return result
+
+
+def memory_readiness(adapter=None) -> bool:
+    """Inspect the tools-disabled auxiliary path; never invoke a provider."""
+    if adapter is None or not callable(getattr(adapter, "_profile_scope", None)):
+        return False
+    try:
+        return callable(getattr(importlib.import_module("agent.auxiliary_client"), "async_call_llm", None))
+    except (ImportError, AttributeError):
+        return False

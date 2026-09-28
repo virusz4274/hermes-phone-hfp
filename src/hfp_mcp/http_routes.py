@@ -7,11 +7,13 @@ resolve mutable controller/ledger objects at request time.
 from __future__ import annotations
 import asyncio
 import time
+import httpx
 from dataclasses import dataclass
 from typing import Any, Callable
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from .settings import RuntimeConfig
+from .contracts import normalize_phone_number, validate_call_purpose
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,7 @@ class HttpRuntime:
     transcript: Callable
     transcripts: Callable
     start_call: Callable
+    callbacks: Callable = lambda: None
 
 
 def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
@@ -99,7 +102,60 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             else {"enabled": False}
         )
         state["native_phone_tasks"] = await _gateway_phone_tasks("owner_status")
+        scheduler = runtime.callbacks()
+        state["scheduled_callbacks"] = scheduler.list(include_terminal=False) if scheduler else []
+        state['recent_callbacks'] = [r for r in scheduler.list() if r['status'] not in {'scheduled', 'firing'}][-10:] if scheduler else []
         return JSONResponse(state)
+
+    async def _phone_callbacks(request):
+        scheduler = runtime.callbacks()
+        if scheduler is None:
+            return JSONResponse({"error": "phone callback scheduler unavailable"}, status_code=409)
+        if request.method == "GET":
+            return JSONResponse({"callbacks": scheduler.list()})
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("expected an object")
+            if not all(isinstance(body.get(key), str) for key in ("number", "request_id", "purpose")):
+                raise ValueError("number, request_id and purpose must be text")
+            controller = runtime.controller()
+            if controller is None:
+                return JSONResponse({'error': 'phone controller disabled'}, status_code=409)
+            route, reason = controller.config.resolve_outbound(body['number'])
+            if not route:
+                return JSONResponse({'error': reason}, status_code=403)
+            if config and config.self_number and normalize_phone_number(body['number'], controller.config.region) == normalize_phone_number(config.self_number, config.default_region):
+                return JSONResponse({'error': 'outbound target matches the configured paired-handset number'}, status_code=403)
+            callback = scheduler.schedule(
+                request_id=body["request_id"], number=body["number"],
+                purpose=body["purpose"], run_at=body.get("run_at"),
+            )
+            runtime.sync_state()
+            connection = runtime.state.versioned_snapshot().get('connection', {}).get('state')
+            return JSONResponse({"ok": True, "callback": callback,
+                                 'warning': None if connection == 'connected' else
+                                 'Callback saved. Bluetooth/HFP must be ready at the due time; delivery is not guaranteed.'})
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def _callback_control(request):
+        scheduler = runtime.callbacks()
+        if scheduler is None:
+            return JSONResponse({'error': 'phone callback scheduler unavailable'}, status_code=409)
+        try:
+            key = request.path_params['callback_id']
+            if request.path_params['action'] == 'cancel':
+                return JSONResponse({'ok': True, 'callback': scheduler.cancel(key)})
+            if request.path_params['action'] != 'reminder':
+                raise ValueError('unknown callback action')
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError('expected an object')
+            scheduler.link_reminder(key, body.get('job_id'))
+            return JSONResponse({'ok': True})
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({'error': str(exc)}, status_code=400)
 
     async def _transcripts(request):
         try:
@@ -117,12 +173,59 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         return JSONResponse(result, status_code=200 if result.get("ok") else 403)
 
     async def _phone_start(request):
-        body = await request.json()
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("expected an object")
+            purpose = validate_call_purpose(body.get("purpose", body.get("brief", "")))
+            if not all(isinstance(body.get(key), str) for key in ("number", "request_id")):
+                raise ValueError("number and request_id must be text")
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(
             await runtime.start_call(
-                str(body.get("number", "")), str(body.get("request_id", ""))
+                body["number"], body["request_id"], purpose,
             )
         )
+
+    async def _caller_notes(request):
+        from .hermes_api import HermesAPI
+        from .routing import RoutingConfig
+
+        if request.path_params["action"] not in {"read", "update"}:
+            return JSONResponse({"error": "unknown note operation"}, status_code=404)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not isinstance(body.get("number"), str):
+                raise ValueError("number must be text")
+            if set(body) - {"number", "notes", "expected_revision"}:
+                raise ValueError("unexpected caller notes argument")
+            update = request.path_params["action"] == "update"
+            notes = body.get("notes")
+            if update and (not isinstance(notes, str) or len(notes) > 8000):
+                raise ValueError("notes must be text of at most 8000 characters")
+            if update and type(body.get("expected_revision")) is not int:
+                raise ValueError("expected_revision from a notes read is required")
+            controller = runtime.controller()
+            routing = controller.config if controller else RoutingConfig.load()
+            number = normalize_phone_number(body["number"], routing.region)
+            route, reason = routing.resolve_outbound(number)
+            if not route:
+                return JSONResponse({"error": reason}, status_code=403)
+            if update and not routing.policies[route.policy].remember:
+                return JSONResponse({"error": "persistent caller memory is disabled"}, status_code=403)
+            api = HermesAPI(routing.endpoints[route.endpoint])
+            try:
+                return JSONResponse(await api.caller_notes(number, **({"notes": notes, "expected_revision": body["expected_revision"]} if update else {})))
+            finally:
+                await api.close()
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            return JSONResponse({"error": "caller notes request rejected"}, status_code=code if code in {400, 403, 409} else 502)
+        except httpx.TransportError:
+            return JSONResponse({"error": "caller notes unavailable; update outcome may be unconfirmed"}, status_code=502)
 
     async def _phone_approval(request):
         if runtime.controller() is None:
@@ -218,11 +321,14 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             return JSONResponse({"error": "Invalid recall request"}, status_code=400)
 
     routes = [
+        Route("/v1/phone/caller-notes/{action}", _caller_notes, methods=["POST"]),
         Route("/v1/phone/recall", _phone_recall, methods=["POST"]),
         Route("/v1/phone", _phone_status, methods=["GET"]),
         Route("/v1/phone/transcripts", _transcripts, methods=["GET"]),
         Route("/v1/phone/transcripts/calls", _transcript_calls, methods=["GET"]),
         Route("/v1/phone/calls", _phone_start, methods=["POST"]),
+        Route("/v1/phone/callbacks", _phone_callbacks, methods=["GET", "POST"]),
+        Route('/v1/phone/callbacks/{callback_id}/{action}', _callback_control, methods=['POST']),
         Route("/v1/phone/approval", _phone_approval, methods=["POST"]),
         Route("/v1/state", _state_endpoint, methods=["GET"]),
         Route("/status", _legacy_status_endpoint, methods=["GET"]),

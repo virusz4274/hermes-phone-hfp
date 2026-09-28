@@ -14,6 +14,7 @@ from typing import Any, Callable, TypeVar
 
 SCHEMA_VERSION = "hfp.v1"
 CALLER_BINDING_TTL_SECONDS = 10.0
+MAX_CALL_PURPOSE_CHARS = 4000
 _MAC_RE = re.compile(r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$", re.IGNORECASE)
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -34,6 +35,12 @@ class ContractError(ValueError):
             "message": self.message,
             "retryable": self.retryable,
         }
+
+
+def validate_call_purpose(value: str) -> str:
+    if not isinstance(value, str) or len(value) > MAX_CALL_PURPOSE_CHARS:
+        raise ContractError("invalid_argument", "call purpose must be text of at most 4000 characters")
+    return value.strip()
 
 
 def validate_mac(value: str) -> str:
@@ -293,7 +300,13 @@ class RequestLedger:
             ).fetchone()
         if row is None:
             return None
+        memory = None
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
+                saved = self._db.execute("SELECT data FROM call_memory_runs WHERE call_id=?", (call_id,)).fetchone()
+                memory = json.loads(saved[0]).get("result") if saved else None
         return {
+            **({"memory_save": memory} if memory else {}),
             "call_id": call_id,
             "caller_number": row[0],
             "role": row[1],
@@ -313,6 +326,9 @@ class RequestLedger:
             ):
                 cursor = self._db.execute(f"DELETE FROM {table} WHERE {column} < ?", (cutoff,))
                 counts += max(0, cursor.rowcount)
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
+                self._db.execute("DELETE FROM call_memory_runs WHERE json_extract(data,'$.updated_at')<? "
+                                 "AND COALESCE(json_extract(data,'$.receipt.deadline'),0)<?", (cutoff, time.time()))
             self._db.execute("DELETE FROM call_transcript WHERE "
                 "(conversation_id IS NULL AND created_at<?) OR conversation_id IN "
                 "(SELECT id FROM phone_conversations WHERE archived_at<?)",

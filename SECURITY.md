@@ -13,7 +13,10 @@ minimal reproduction using synthetic callers. No response-time guarantee is made
 
 ## Trust and data
 
-- Caller ID selects a route; it is not proof of identity. An admin route permits
+- The paired phone's Bluetooth-reported caller number is the trusted routing and
+  caller-memory identity. There is no additional caller verification step. This
+  does not prove who is speaking: spoofed or reassigned numbers reported as a
+  known number are indistinguishable under this design. An admin route permits
   that profile's tools, subject to Hermes approvals. Keep normal approvals enabled.
 - Restricted callers need dedicated profiles and integrations that enforce caller
   ownership. Profiles are not operating-system sandboxes.
@@ -28,3 +31,13 @@ minimal reproduction using synthetic callers. No response-time guarantee is made
   [data retention](docs/phone-routing.md#conversation-continuity).
 - Local files are private to the service account, not encrypted against that
   account or a machine administrator. Backups may retain deleted live data.
+
+Automatic note closeout uses a separate private credential created from an
+admitted call's binding. It cannot run tools, select another caller/profile, or
+renew caller authority. Ordinary caller bindings remain revoked after hangup.
+Extracted checkpoints may be merged for a bounded recovery period; current
+routing, note-write permission, and forget generations are checked before commit.
+Notes and dialogue remain untrusted input to a tools-disabled extraction model.
+Checkpoint credentials stay in the private daemon ledger and are never included
+in voice context or public status. Forgetting notes removes pending gateway
+checkpoints and their credentials, so recovery cannot restore forgotten facts.

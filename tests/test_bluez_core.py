@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from types import SimpleNamespace
 
 import pytest
 
@@ -324,7 +325,8 @@ def _bare_profile(on_new, on_disconnect=lambda _address: None):
     return profile
 
 
-def test_profile_closes_fd_before_disconnection_callback(monkeypatch):
+@pytest.fixture
+def profile_sockets(monkeypatch):
     sockets = []
 
     def socket_factory(*_args, **_kwargs):
@@ -332,12 +334,24 @@ def test_profile_closes_fd_before_disconnection_callback(monkeypatch):
         sockets.append(sock)
         return sock
 
+    # Mock the whole profile socket dependency: some Python builds omit the
+    # Bluetooth constants even though these ownership tests need no hardware.
+    monkeypatch.setattr(profile_module, "socket", SimpleNamespace(
+        socket=socket_factory,
+        AF_BLUETOOTH=object(),
+        SOCK_STREAM=socket.SOCK_STREAM,
+        BTPROTO_RFCOMM=object(),
+        SHUT_RDWR=socket.SHUT_RDWR,
+    ))
+    return sockets
+
+
+def test_profile_closes_fd_before_disconnection_callback(profile_sockets):
     callback_closed = []
     profile = _bare_profile(
         lambda *_args: None,
-        lambda _address: callback_closed.append(sockets[0].closed),
+        lambda _address: callback_closed.append(profile_sockets[0].closed),
     )
-    monkeypatch.setattr(profile_module.socket, "socket", socket_factory)
     profile.NewConnection(
         "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
         77,
@@ -349,19 +363,11 @@ def test_profile_closes_fd_before_disconnection_callback(monkeypatch):
     assert callback_closed == [True]
 
 
-def test_profile_rejects_duplicate_connection_and_closes_new_fd(monkeypatch):
-    sockets = []
-
-    def socket_factory(*_args, **_kwargs):
-        sock = _FakeSocket()
-        sockets.append(sock)
-        return sock
-
+def test_profile_rejects_duplicate_connection_and_closes_new_fd(profile_sockets):
     profile = _bare_profile(lambda *_args: None)
-    monkeypatch.setattr(profile_module.socket, "socket", socket_factory)
     path = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
     profile.NewConnection(path, 77, {})
     with pytest.raises(BlueZProfileRejected):
         profile.NewConnection(path, 78, {})
-    assert sockets[0].closed is False
-    assert sockets[1].closed is True
+    assert profile_sockets[0].closed is False
+    assert profile_sockets[1].closed is True

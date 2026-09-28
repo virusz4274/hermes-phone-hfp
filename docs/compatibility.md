@@ -5,8 +5,8 @@ establish support for every Bluetooth adapter or handset.
 
 | Component | Preview target | Evidence / limitation |
 | --- | --- | --- |
-| Python | 3.11–3.13 | CI matrix; local release validation uses 3.13 |
-| Hermes | `819988acb750836387fbb9d5d76203a9b3f530f4` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
+| Python | 3.11–3.13 | Supported range; current CI tests 3.13 only; local validation uses 3.13 |
+| Hermes | `130b8f2c5dbca93a81aa396dd2ba44420d78f6f0` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
 | MCP SDK | 1.x, >=1.27 | Daemon extra only; MCP 2 renamed FastMCP and is not a daemon target |
 | Bluetooth host | Debian-family Linux, systemd; Raspberry Pi OS Bookworm/Trixie | Installer targets; fresh-machine validation is required on each platform |
 | Phone / Bluetooth controller | HFP Audio Gateway + SCO over HCI | No universal handset/adapter claim; publish results with model and OS versions |
@@ -33,3 +33,15 @@ Record hardware results with phone model/OS, controller chipset, host OS/kernel,
 BlueZ/WirePlumber versions, Hermes commit, voice backend, incoming/outgoing calls,
 interruption, hangup/reconnect and restart behavior. Do not include caller IDs,
 Bluetooth addresses, transcripts, or credentials in public reports.
+
+Automatic call memory uses Hermes's `agent.auxiliary_client.async_call_llm` under
+the routed profile scope, with no action tools. The bridge advertises
+`call_memory_closeout` only when that interface exists. Provider availability and
+extraction quality still require a live check. The dedicated `auxiliary.phone_memory`
+task uses normal Hermes auxiliary routing and can be configured in the profile.
+
+Notes APIs now return `revision` and require `expected_revision` for replacement
+writes. Upgrade daemon and plugin together. Old clients that omit the revision
+receive a validation error; stale revisions receive a conflict instead of
+silently overwriting concurrent updates. Database additions are automatic and
+preserve existing notes and transcripts.

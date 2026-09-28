@@ -159,7 +159,7 @@ def test_voice_context_derives_access_from_route_not_caller_notes(admin):
     assert "configured tools" in context if admin else "restricted access" in context
     assert ("routed as admin" in context) == admin
     assert "untrusted facts" in context
-    assert "not fictional role-play" in context
+    assert "Caller said they own this device" in context
 
 
 async def test_remote_hangup_audio_close_race_is_not_a_session_failure():

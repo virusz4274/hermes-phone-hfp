@@ -21,6 +21,21 @@ The Hermes installer automates the routing file path and starter YAML. Neither i
 
 Package installation can update dependencies. Plugin file backups do not roll back Python dependencies or OS packages; reinstall a chosen package revision separately if needed.
 
+## Release branches and versions
+
+Use `main` for reviewed public previews and `development` for ongoing integration.
+After stopping affected services as described above, update a clean `main` checkout
+with `git switch main` and `git pull --ff-only origin main`. For a pinned release,
+use `git fetch origin --tags` and `git switch --detach <published-release-tag>`.
+A checkout change alone is not a complete upgrade: rerun both installers from the
+same revision before starting the gateways. There is no automatic branch or tag update.
+
+When upgrading to **0.1.1rc1**, upgrade the daemon and Hermes plugin together.
+Public note replacements now require `expected_revision` from the preceding read;
+stale revisions cause a conflict and omitted revisions fail validation. Existing
+notes and transcripts are preserved by the automatic database additions. This
+preview does not promise patch-level API compatibility.
+
 ## Backups
 
 The Hermes installer automatically backs up replaced plugin files and `config.yaml` under `<Hermes home>/hfp-phone-backups/<timestamp>/`. That directory is outside plugin discovery. The Bluetooth installer separately backs up its host configuration and daemon environment under `/var/lib/hfp-mcp/backups/`.

@@ -158,6 +158,8 @@ class GatewayTasks:
 
     def owned(self, binding_id, conversation_id):
         binding = self.store.binding(binding_id)
+        if binding['policy'].get('notes_only'):
+            raise PermissionError('conversation-only calls cannot create native tasks')
         if binding['profile'] != self.bridge.profile:
             raise PermissionError('wrong profile')
         with self.store._lock:

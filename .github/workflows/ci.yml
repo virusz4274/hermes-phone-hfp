@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  # Fast unit and syntax test that runs on every push and PR (~1 minute)
+  # Unit and syntax checks for main pushes, tags, PRs, and manual runs
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -28,11 +28,13 @@ jobs:
       - name: Validate shell syntax
         run: bash -n setup/install.sh
 
-  # Packaging smoke test: Only runs on release tags (v*) or manual dispatch
+  # Packaging smoke test: Release PRs to main, release tags, and manual runs
   packages:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

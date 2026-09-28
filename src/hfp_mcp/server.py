@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -56,6 +57,7 @@ from .audio.sidecar import (
     AudioStreamServer,
     StreamGrant,
 )
+from .callbacks import CallbackScheduler
 from .bluez.agent import HFPAgent, register_agent, unregister_agent
 from .bluez.manager import BlueZManager
 from .bluez.profile import HFPProfile, register_hfp_profile, unregister_hfp_profile
@@ -72,6 +74,7 @@ from .contracts import (
     failure,
     normalize_phone_number,
     ok,
+    validate_call_purpose,
     validate_mac,
     validate_request_id,
     validate_session_id,
@@ -189,6 +192,7 @@ _media_leases = MediaLeaseManager()
 _audio_stream_server: AudioStreamServer | None = None
 _gemini_live_manager: GeminiLiveManager | None = None
 _phone_controller = None
+_callback_scheduler: CallbackScheduler | None = None
 _gemini_allowed_tools: frozenset[str] | None = None
 _manager: BlueZManager | None = None
 _rfcomm_thread: RFCOMMThread | None = None
@@ -1361,7 +1365,7 @@ async def _run_handshake_and_session(context: RFCOMMConnectionContext) -> None:
                     if stats.get("session_id") == call_id:
                         _request_ledger.audit("voice_metrics", "final", call_id=call_id, detail={
                             key: stats.get(key) for key in (
-                                "timing_from_audio_acquisition_ms", "tool_bridge", "reconnect_count",
+                                "timing_from_audio_acquisition_ms", "startup_preparation_ms", "startup_audio_activity", "tool_bridge", "reconnect_count",
                                 "input_queue_overflow_frames", "dropped_playback_frames",
                                 "playback_queue_peak_ms", "transcript_storage_error",
                             )
@@ -1443,7 +1447,7 @@ def _package_version() -> str:
     try:
         return version("hfp-mcp")
     except PackageNotFoundError:
-        return "0.1.0"
+        return "0.1.1rc1"
 
 
 @mcp.tool()
@@ -1720,6 +1724,11 @@ async def place_call(
     must not use this as an automatic retry after another dial tool fails;
     require a new user request before a second outbound attempt.
     """
+    return await _place_call(number, request_id, timeout_seconds, cancel_on_timeout)
+
+
+async def _place_call(number, request_id, timeout_seconds=30.0, cancel_on_timeout=True, *, outbound=None):
+    """Shared call control; only interactive admission supplies owner context."""
     try:
         normalized = normalize_phone_number(
             number,
@@ -1734,6 +1743,7 @@ async def place_call(
             result = await _dial_normalized(
                 normalized,
                 min(_configured_at_dial_timeout(), timeout),
+                **({"outbound": outbound} if outbound is not None else {}),
             )
             if not result.get("ok"):
                 return failure(
@@ -1742,7 +1752,8 @@ async def place_call(
                     state=_state.versioned_snapshot(),
                 )
             waited = await _wait_for_status(
-                lambda state: state["call_state"] == CallState.ACTIVE.value,
+                lambda state: state["call_state"] == CallState.ACTIVE.value
+                and (outbound is None or _outgoing_call_for_intent(result.get("_dial_intent", {})) is not None),
                 max(0.0, deadline - loop.time()),
             )
             if waited.get("ok"):
@@ -1824,6 +1835,8 @@ async def place_call(
             )
 
         operation = f"place_call:{normalized}:{timeout:g}:{int(cancel_on_timeout)}"
+        if outbound is not None:
+            operation += ":" + hashlib.sha256(outbound[2].encode()).hexdigest()
         response = await _run_idempotent_async(request_id, operation, _place)
         if _request_ledger is not None:
             _request_ledger.audit(
@@ -2290,6 +2303,7 @@ async def _cancel_late_dial_intent(
 async def _dial_normalized(
     normalized: str,
     command_timeout_seconds: float,
+    *, outbound=None,
 ) -> dict:
     """Send one ATD while retaining enough state to reconcile a late reply."""
 
@@ -2314,6 +2328,9 @@ async def _dial_normalized(
             expected_call_generation=call_generation,
         ):
             return {"ok": False, "error": "Call state changed before ATD"}
+        if outbound is not None:
+            controller, request_id, purpose = outbound
+            controller.stage_outbound(request_id, normalized, purpose, intent)
         ambiguous_timeout = False
         try:
             await get_at_command_broker(_state).execute(
@@ -3500,6 +3517,11 @@ def _create_phone_controller(routing):
             return ClassicVoice(controller, acquire=acquire_classic,
                 release=release_audio_stream, clear=clear_audio_playback)
         _gemini_allowed_tools = frozenset({"ask_hermes", "end_call", "phone_status"})
+        policy = controller.config.policies[controller.route.policy]
+        if policy.notes_only:
+            _gemini_allowed_tools = frozenset({"phone_notes", "end_call", "phone_status"})
+        elif policy.allows("hfp_caller_read"):
+            _gemini_allowed_tools |= {"phone_notes"}
         if controller.conversation:
             _gemini_allowed_tools |= {"phone_recall", "phone_session", "hermes_task"}
         routed_call_id = controller.call_id
@@ -3508,13 +3530,22 @@ def _create_phone_controller(routing):
             if not result.get("ok"):
                 raise RuntimeError("phone rejected hangup")
             return result
+        async def notes_context():
+            # Direct note updates refresh the binding; cold reconnects must not
+            # restore the note snapshot captured before those writes.
+            return controller.voice_context()
+        from .gemini_live import gemini_input_transcription_enabled, gemini_output_transcription_enabled
+        if controller.memory_capture and not (gemini_input_transcription_enabled() and gemini_output_transcription_enabled()):
+            controller.memory_capture.data['capture_complete'] = False
         _gemini_live_manager = GeminiLiveManager(
             ensure_stream=_acquire_gemini_stream, clear_playback=_clear_gemini_playback,
             hangup=routed_hangup, release_stream=release_audio_stream,
             allowed_tools=_gemini_allowed_tools, request_handler=controller.delegate,
             full_transcripts_enabled=bool(controller.conversation or (_runtime_config and _runtime_config.full_transcripts)),
             transcript_sink=controller.conversation.capture if controller.conversation else _persist_transcript,
-            context_provider=controller.conversation.context if controller.conversation else None,
+            memory_sink=controller.capture_memory if controller.memory_capture else None,
+            context_provider=(controller.conversation.context if controller.conversation else
+                              notes_context if "phone_notes" in _gemini_allowed_tools else None),
             context_ready=controller.conversation.voice_ready if controller.conversation else None)
         return GeminiVoice(_gemini_live_manager)
 
@@ -3524,31 +3555,56 @@ def _create_phone_controller(routing):
 
     return PhoneController(routing, snapshot=_state.versioned_snapshot,
                            answer=answer, end=end, make_voice=voice, connect=connect,
-                           transcript_sink=_persist_transcript, timing_sink=timing, ledger=_request_ledger)
+                           transcript_sink=_persist_transcript, timing_sink=timing, ledger=_request_ledger,
+                           full_transcripts=bool(_runtime_config and _runtime_config.full_transcripts))
 
 
 @mcp.tool()
-async def start_phone_call(number: str, request_id: str) -> dict:
-    """Start a routed interactive call; success requires the voice backend ready."""
-    if _phone_controller is None:
-        return failure("phone_routing_disabled", "Configure phone routes before starting an interactive call")
-    route, reason = _phone_controller.config.resolve(number)
-    if route is None:
-        return failure("phone_route_unavailable", reason)
-    result = await place_call(number, request_id)
-    if not result.get("ok"):
-        return result
-    call_id = _state.call_id
-    deadline = time.monotonic() + 45
-    while time.monotonic() < deadline and _state.call_id == call_id:
-        status = _phone_controller.status
-        if status.get("call_id") == call_id:
-            if status.get("state") == "ready":
-                return ok({"call_id": call_id, "voice": status.get("voice"), "profile": status.get("profile")})
-            if status.get("state") == "failed":
-                return failure("phone_voice_failed", "Call voice failed; do not redial automatically")
-        await asyncio.sleep(0.1)
-    return failure("phone_voice_timeout", "Call voice did not become ready; inspect call state before retrying")
+async def start_phone_call(number: str, request_id: str, purpose: str = "") -> dict:
+    """Start an explicitly requested interactive call with an optional owner brief.
+
+    Include every requested objective and relevant context (recipient, introduction,
+    language, meeting constraints or reminder details). Gemini cannot see the owner
+    chat. Success means voice is ready, not that the conversation/task is complete.
+    """
+    try:
+        brief = validate_call_purpose(purpose)
+        request_id = validate_request_id(request_id)
+        controller = _phone_controller
+        if controller is None:
+            return failure("phone_routing_disabled", "Configure phone routes before starting an interactive call")
+        normalized = normalize_phone_number(number, controller.config.region)
+        route, reason = controller.config.resolve_outbound(normalized)
+        if route is None:
+            return failure("phone_route_unavailable", reason)
+        _reject_self_call(normalized)
+        digest = hashlib.sha256(brief.encode()).hexdigest()
+
+        async def start():
+            # The inner call-control operation has its own durable retry identity.
+            dial_request = "phone-dial-" + hashlib.sha256(request_id.encode()).hexdigest()
+            try:
+                result = await _place_call(normalized, dial_request,
+                    outbound=(controller, request_id, brief))
+                if not result.get("ok"):
+                    return result
+                call_id = result["result"]["call_id"]
+                deadline = time.monotonic() + 45
+                while time.monotonic() < deadline and _state.call_id == call_id:
+                    status = controller.status
+                    if status.get("call_id") == call_id:
+                        if status.get("state") == "ready":
+                            return ok({"call_id": call_id, "voice": status.get("voice"), "profile": status.get("profile")})
+                        if status.get("state") == "failed":
+                            return failure("phone_voice_failed", "Call voice failed; do not redial automatically")
+                    await asyncio.sleep(0.1)
+                return failure("phone_voice_timeout", "Call voice did not become ready; inspect call state before retrying")
+            finally:
+                controller.discard_outbound(request_id)
+
+        return await _run_idempotent_async(request_id, f"start_phone_call:{normalized}:{digest}", start)
+    except Exception as exc:
+        return _contract_failure(exc)
 
 
 def create_http_app(
@@ -3574,6 +3630,7 @@ def create_http_app(
         audio_server=lambda: _audio_stream_server,
         transcript=get_call_transcript, transcripts=list_call_transcripts,
         start_call=start_phone_call,
+        callbacks=lambda: _callback_scheduler,
     )
     app.router.routes.extend(control_routes(config, runtime))
     app.add_middleware(
@@ -3590,19 +3647,35 @@ def create_http_app(
 
     @asynccontextmanager
     async def _app_lifespan(starlette_app):
-        global _phone_controller
+        global _phone_controller, _callback_scheduler
         from .routing import RoutingConfig
         routing = RoutingConfig.load() if start_bluetooth else RoutingConfig()
+        if routing.enabled and any(route and route.voice == "gemini_live" for route in
+                                   [*routing.numbers.values(), routing.default, routing.outbound]):
+            from .gemini_live import warmup
+            try:
+                await warmup()
+            except Exception:
+                log.exception("Gemini startup preparation failed; call-time availability checks still apply")
         if start_bluetooth:
             await _start_bluetooth_stack()
         _state.set_health("http", "ok")
         if start_bluetooth and routing.enabled:
             _phone_controller = _create_phone_controller(routing)
             _phone_controller.start()
+            _callback_scheduler = CallbackScheduler(
+                config.database_file,
+                start_phone_call,
+                region=routing.region,
+            )
+            await _callback_scheduler.start()
         try:
             async with session_lifespan(starlette_app):
                 yield
         finally:
+            if _callback_scheduler:
+                await _callback_scheduler.close()
+                _callback_scheduler = None
             if _phone_controller:
                 await _phone_controller.close()
                 _phone_controller = None
