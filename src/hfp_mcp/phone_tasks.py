@@ -14,6 +14,8 @@ import threading
 import time
 from contextlib import suppress
 
+import httpx
+
 from .hermes_api import HermesAPI
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted", "uncertain"}
@@ -128,6 +130,10 @@ class GatewayTasks:
         self.worker = None
         self.children = set()
         self.streams = {}
+        self.run_locks = {}
+
+    def run_lock(self, task_id):
+        return self.run_locks.setdefault(task_id, asyncio.Lock())
 
     def spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -215,9 +221,7 @@ class GatewayTasks:
                         await self.stop(target)
                         return {'status': 'stopping', 'task_id': target['task_id'],
                             'message': 'The original task is stopping. Replacement has not started; check status before submitting it.'}
-                    result = await self.api.steer(target['run_id'], text)
-                    if not result.get('accepted'): raise ValueError('native steering not accepted')
-                    return {**self.registry.public(target), 'message': 'Correction accepted for delivery; not yet confirmed applied.'}
+                    return await self.steer(target, text)
                 root = target['session_id']
             else:
                 root = primary
@@ -260,7 +264,9 @@ class GatewayTasks:
             return self.registry.public(row)
 
     async def launch(self, row, text, caller_id):
-        headers = {'Idempotency-Key': 'hfp-task-' + row['task_id'],
+        attempt = row.get('run_attempt', 0)
+        request_key = 'hfp-task-' + row['task_id'] + (f'-{attempt}' if attempt else '')
+        headers = {'Idempotency-Key': request_key,
                    'X-Hermes-Session-Key': 'hfp:' + self.bridge.profile + ':' + caller_id,
                    'X-HFP-Binding': row['binding_id'], 'X-HFP-Task': row['task_id']}
         try:
@@ -268,12 +274,14 @@ class GatewayTasks:
                 json={'session_id': row['session_id'], 'input': text})
             # Middleware persists the ID before the native worker can execute.
             current = self.registry.get(row['task_id'])
+            if current['binding_id'] != row['binding_id']: return
             if not current.get('run_id'):
                 raise RuntimeError('native admission did not bind phone task')
         except asyncio.CancelledError:
             raise
         except Exception:
             current = self.registry.get(row['task_id'])
+            if current['binding_id'] != row['binding_id']: return
             if not current.get('run_id'):
                 self.registry.update(row['task_id'], status='uncertain',
                     message='Hermes admission was not confirmed. Do not repeat this action automatically.')
@@ -292,6 +300,7 @@ class GatewayTasks:
         self.registry.update(task_id, run_id=run_id, status='accepted', message='Hermes accepted the task; it has not completed.')
 
     async def stop(self, row, reason=None):
+        row = self.registry.get(row['task_id'])
         if row['status'] in TERMINAL: return self.registry.public(row)
         self.registry.update(row['task_id'], status='stopping', continue_after_call=False, delivery='cancelled',
             stop_reason=reason or 'Cancellation requested; completed actions are not undone.',
@@ -304,7 +313,76 @@ class GatewayTasks:
             self.capacity.release(row['task_id'])
         return self.registry.public(self.registry.get(row['task_id']))
 
+    def start_correction(self, row, state, text):
+        """Consume only confirmed undelivered input, never repeat the original run.
+
+        Called under the task's run lock, before retiring its existing grant.
+        The same logical task retains its capacity slot and continuation deadline.
+        Persist the next admission before I/O; an interrupted/uncertain admission
+        uses the existing fail-closed restart path instead of submitting twice.
+        """
+        if row['status'] in TERMINAL or row['status'] == 'stopping':
+            raise PermissionError('task no longer accepts corrections')
+        if not isinstance(text, str) or not text.strip() or len(text) > 48000:
+            raise ValueError('invalid undelivered correction')
+        binding = self.store.run_binding(row['run_id'])
+        history = [*row.get('run_history', []), {
+            'run_id': row['run_id'], 'status': state['status'],
+            'output': str(state.get('output') or '')[:12000],
+            'pending_steer': text,
+        }]
+        child = 'hfp-' + secrets.token_hex(16)
+        updated = {**row, 'run_id': None, 'binding_id': child,
+            'run_attempt': row.get('run_attempt', 0) + 1, 'run_history': history,
+            'status': 'submitting', 'approval': None, 'pending_steer': text,
+            'message': 'The previous run finished before applying the correction. '
+                       'Submitting the correction as a follow-up; the change is not yet confirmed.'}
+        with self.store._lock, self.store.db:
+            # Copy the original grant without extending its expiry or changing
+            # caller, policy, persistence, call date, timezone or managed session.
+            self.store.db.execute('''INSERT INTO bindings
+                (session_id,call_id,profile,caller_id,policy,persistent,expires,active,started_at,timezone)
+                SELECT ?,call_id,profile,caller_id,policy,persistent,expires,active,started_at,timezone
+                FROM bindings WHERE session_id=?''', (child, row['binding_id']))
+            self.store.db.execute('UPDATE bindings SET active=0 WHERE session_id=?', (row['binding_id'],))
+            self.store.db.execute('UPDATE phone_tasks SET binding_id=?,data=? WHERE id=?',
+                (child, json.dumps(updated), row['task_id']))
+        text = json.dumps({
+            'caller_correction': text,
+            'previous_run_output': state.get('output'),
+            'instructions': 'Apply only this previously undelivered correction to the existing result. '
+                'Use the session history and inspect current state before changing it. '
+                'Do not repeat the original request or duplicate completed actions. '
+                'Verify the resulting state before reporting success.',
+        })
+        self.spawn(self.launch(updated, text, binding['caller_id']))
+        return updated
+
+    async def steer(self, row, text):
+        async with self.run_lock(row['task_id']):
+            row = self.registry.get(row['task_id'])
+            if row['status'] in TERMINAL or row['status'] == 'stopping' or not row.get('run_id'):
+                raise ValueError('Task is not accepting steering; check status and use an explicit follow-up for a completed task.')
+            try:
+                result = await self.api.steer(row['run_id'], text)
+            except httpx.HTTPStatusError as exc:
+                # A definite rejection can race the observer's completion poll.
+                # A timeout is ambiguous and must never take this fallback.
+                if exc.response.status_code != 409: raise
+                state = await self.api.request('GET', 'v1/runs/' + row['run_id'])
+                current = self.registry.get(row['task_id'])
+                if state['status'] != 'completed' or state.get('pending_steer'): raise
+                return self.registry.public(self.start_correction(current, state, text))
+            if not result.get('accepted'):
+                raise ValueError('native steering not accepted')
+            return {**self.registry.public(self.registry.get(row['task_id'])),
+                'status': 'pending', 'message': 'Correction accepted for delivery; not yet confirmed applied.'}
+
     async def refresh(self, row):
+        async with self.run_lock(row['task_id']):
+            return await self.refresh_run(self.registry.get(row['task_id']))
+
+    async def refresh_run(self, row):
         if not row.get('run_id') or row['status'] in TERMINAL: return row
         try:
             state = await self.api.request('GET', 'v1/runs/' + row['run_id'])
@@ -314,8 +392,19 @@ class GatewayTasks:
                 state = {**state, 'status': 'stopping'}
             fields = {'status': state['status'], 'approval': state.get('approval') if state['status'] == 'waiting_for_approval' else None}
             if state['status'] in TERMINAL:
+                pending = state.get('pending_steer')
+                if pending and state['status'] == 'completed' and current['status'] != 'stopping':
+                    try:
+                        return self.start_correction(current, state, pending)
+                    except (PermissionError, ValueError):
+                        pass  # Expired/revoked authority never starts a follow-up.
                 fields.update(message=str(state.get('output') or state.get('error') or current.get('stop_reason') or state['status'])[:12000],
-                    pending_steer=state.get('pending_steer'), completed_at=time.time())
+                    pending_steer=pending, completed_at=time.time())
+                if pending:
+                    fields.update(status='failed' if state['status'] == 'completed' else state['status'],
+                        message='The requested correction was not applied. No automatic follow-up was started '
+                                'because the run did not complete normally or its authority ended. '
+                                'Earlier actions may remain in effect; inspect current state before retrying.')
                 self.store.revoke(row['binding_id'])
                 self.capacity.release(row['task_id'])
             return self.registry.update(row['task_id'], **fields)
@@ -379,9 +468,7 @@ class GatewayTasks:
         if action == 'steer':
             text = body.get('text')
             if not isinstance(text, str) or not text.strip() or len(text) > 8000: raise ValueError('invalid correction')
-            result = await self.api.steer(target['run_id'], text)
-            return {'status': 'pending' if result.get('accepted') else 'error', 'task_id': target['task_id'],
-                'message': 'Correction accepted for delivery, not yet confirmed applied.' if result.get('accepted') else 'Correction not accepted.'}
+            return await self.steer(target, text)
         if action == 'approve':
             if body.get('choice') not in {'once', 'deny'}: raise ValueError('invalid approval')
             return await self.api.request('POST', 'v1/runs/' + target['run_id'] + '/approval',

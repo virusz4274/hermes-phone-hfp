@@ -552,6 +552,16 @@ Ambiguous/conflicting requests need clarification. Status questions never submit
 work. At capacity, offer cancellation/replacement; nothing is queued. Replacement
 first stops the selected run, then checks it has settled before new submission.
 
+Steering acceptance confirms delivery to Hermes, not that a correction was applied.
+If a run completes with an undelivered correction (`pending_steer`), the gateway
+submits only that correction as a new native run in the same task and session.
+The task remains pending until the follow-up finishes; it retains its original
+continuation permission and expiry. Previous run IDs and results are retained.
+Cancelled, interrupted, failed or unauthorized work does not start a follow-up.
+An uncertain follow-up admission is reported and never automatically resubmitted.
+Voice and Telegram completion notices must reflect the correction's result,
+not the earlier outcome it was meant to change.
+
 To enable continuation for a known admin caller, set its policy's
 `background_tasks: true`. Configure that Hermes profile's existing Telegram home
 channel first. `phone.background_task_minutes` defaults to 30 minutes, measured

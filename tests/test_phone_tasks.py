@@ -6,6 +6,7 @@ from types import SimpleNamespace, ModuleType
 import sys
 
 import pytest
+import httpx
 
 from hfp_mcp.caller_context import CallerStore
 from hfp_mcp.phone_tasks import GatewayTasks, TERMINAL
@@ -100,6 +101,173 @@ async def test_correction_followup_status_and_replacement_do_not_duplicate(syste
     result = await submit(m, 'replace', relationship='replace', task_id=follow['task_id'])
     assert result['status'] == 'stopping'
     assert len(api.submissions) == 2 and api.stopped == [follow['run_id']]
+
+
+async def test_late_correction_continues_once_after_hangup_and_reports_updated_result(system):
+    m, api, store, root = system
+    original = await submit(m, 'reminder', continue_after_call=True)
+    correction = 'Change the existing 6 PM callback to 4:30 PM.'
+    await m.control(dict(binding_id='parent', conversation_id='a'*32,
+        action='steer', task_id=original['task_id'], text=correction))
+    api.runs[original['run_id']].update(status='completed', output='Scheduled for 6 PM', pending_steer=correction)
+    store.revoke('parent')
+
+    # Competing status polls must not launch the correction more than once or
+    # expose the stale 6 PM result as the task's final successful outcome.
+    results = await asyncio.gather(m.refresh(original), m.refresh(original))
+    await asyncio.sleep(0)
+    assert all(r['status'] not in TERMINAL for r in results)
+    assert all(r['message'] != 'Scheduled for 6 PM' for r in results)
+    assert len(api.submissions) == 2
+    follow = m.registry.get(original['task_id'])
+    assert follow['run_id'] != original['run_id']
+    assert follow['session_id'] == root
+    assert follow['continue_after_call'] is True
+    assert follow['expires_at'] == original['expires_at']
+    assert follow['delivery'] == 'pending'
+    assert follow['run_history'][0]['run_id'] == original['run_id']
+    assert follow['run_history'][0]['output'] == 'Scheduled for 6 PM'
+    envelope = json.loads(api.submissions[-1]['json']['input'])
+    assert envelope['caller_correction'] == correction
+    assert envelope['previous_run_output'] == 'Scheduled for 6 PM'
+    assert api.submissions[0]['headers']['Idempotency-Key'] != api.submissions[1]['headers']['Idempotency-Key']
+    assert store.run_binding(follow['run_id'])
+    with pytest.raises(PermissionError): store.run_binding(original['run_id'])
+    assert m.capacity.db.execute('SELECT count(*) FROM phone_task_slots').fetchone()[0] == 1
+
+    # Polls holding the old snapshot must now observe the follow-up run.
+    api.runs[follow['run_id']].update(status='completed', output='Verified callback and reminder at 4:30 PM')
+    final = await m.refresh(original)
+    assert final['status'] == 'completed' and '4:30 PM' in final['message']
+    assert final['pending_steer'] is None
+    assert len(api.submissions) == 2
+    assert m.capacity.db.execute('SELECT count(*) FROM phone_task_slots').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('reason', ['expired', 'hangup', 'cancelled', 'failed', 'interrupted', 'reset', 'stop'])
+async def test_pending_correction_never_revives_ended_authority_or_failed_work(system, reason):
+    m, api, store, root = system
+    original = await submit(m, 'one', continue_after_call=reason != 'hangup')
+    if reason == 'expired': m.registry.update(original['task_id'], expires_at=time.time()-1)
+    if reason == 'hangup': store.revoke('parent')
+    if reason == 'reset': store.retire_managed(root)
+    if reason == 'stop': await m.stop(original)
+    status = reason if reason in {'cancelled', 'failed', 'interrupted'} else 'completed'
+    api.runs[original['run_id']].update(status=status, output='Original result', pending_steer='Change the time')
+    result = await m.refresh(original)
+    await asyncio.sleep(0)
+    assert len(api.submissions) == 1
+    assert result['status'] in TERMINAL - {'completed'}
+    assert result['pending_steer'] == 'Change the time'
+    assert 'correction was not applied' in result['message']
+    with pytest.raises(PermissionError): store.run_binding(original['run_id'])
+
+
+async def test_rejected_steer_completion_race_starts_only_the_correction(system, monkeypatch):
+    m, api, store, root = system
+    original = await submit(m, 'one', continue_after_call=True)
+    api.runs[original['run_id']].update(status='completed', output='Original result')
+    async def rejected(*args):
+        response = httpx.Response(409, request=httpx.Request('POST', 'http://test/steer'))
+        raise httpx.HTTPStatusError('not accepting', request=response.request, response=response)
+    monkeypatch.setattr(api, 'steer', rejected)
+    result = await m.control(dict(binding_id='parent', conversation_id='a'*32,
+        action='steer', task_id=original['task_id'], text='Change the time'))
+    await asyncio.sleep(0)
+    assert result['status'] == 'submitting'
+    assert len(api.submissions) == 2
+    assert json.loads(api.submissions[-1]['json']['input'])['caller_correction'] == 'Change the time'
+
+
+async def test_steer_timeout_never_resubmits_ambiguous_input(system, monkeypatch):
+    m, api, store, root = system
+    original = await submit(m, 'one')
+    async def timeout(*args): raise TimeoutError('unknown delivery')
+    monkeypatch.setattr(api, 'steer', timeout)
+    with pytest.raises(TimeoutError):
+        await m.control(dict(binding_id='parent', conversation_id='a'*32,
+            action='steer', task_id=original['task_id'], text='Change the time'))
+    assert len(api.submissions) == 1
+
+
+async def test_restart_during_followup_admission_never_replays_it(system, monkeypatch):
+    m, api, store, root = system
+    original = await submit(m, 'one', continue_after_call=True)
+    api.runs[original['run_id']].update(status='completed', output='Original result', pending_steer='Change the time')
+    pending_launches = []
+    monkeypatch.setattr(m, 'spawn', lambda coro: pending_launches.append(coro))
+    follow = await m.refresh(original)
+    assert follow['status'] == 'submitting' and follow['run_id'] is None
+    for coro in pending_launches: coro.close()
+    m2 = GatewayTasks(m.bridge, m.adapter, m.peers, m.admission_lock, api=api)
+    await m2.start()
+    await m2.close()
+    row = m2.registry.get(original['task_id'])
+    assert row['status'] == 'uncertain' and row['pending_steer'] == 'Change the time'
+    assert len(api.submissions) == 1
+    with pytest.raises(PermissionError): store.binding(follow['binding_id'])
+
+
+async def test_completion_notification_waits_for_correction_result(system, monkeypatch):
+    m, api, store, root = system
+    original = await submit(m, 'reminder', continue_after_call=True)
+    api.runs[original['run_id']].update(status='completed', output='Scheduled for 6 PM',
+        pending_steer='Move it to 4:30 PM')
+    notices = []
+    delivered = asyncio.Event()
+    async def deliver(row):
+        notices.append(row['message'])
+        m.registry.update(row['task_id'], delivery='sent')
+        delivered.set()
+    monkeypatch.setattr(m, 'deliver', deliver)
+    await m.start()
+    try:
+        for _ in range(100):
+            if len(api.submissions) == 2: break
+            await asyncio.sleep(.01)
+        assert len(api.submissions) == 2 and notices == []
+        follow = m.registry.get(original['task_id'])
+        api.runs[follow['run_id']].update(status='completed', output='Verified 4:30 PM')
+        await asyncio.wait_for(delivered.wait(), 3)
+        assert notices == ['Verified 4:30 PM']
+    finally:
+        await m.close()
+
+
+async def test_cancellation_with_stale_snapshot_stops_followup(system):
+    m, api, store, root = system
+    original = await submit(m, 'reminder', continue_after_call=True)
+    api.runs[original['run_id']].update(status='completed', output='Original result',
+        pending_steer='Change the time')
+    await m.refresh(original)
+    await asyncio.sleep(0)
+    follow = m.registry.get(original['task_id'])
+    await m.stop(original)
+    assert api.stopped == [follow['run_id']]
+    with pytest.raises(PermissionError): store.run_binding(follow['run_id'])
+    final = await m.refresh(original)
+    assert final['status'] == 'cancelled'
+
+
+async def test_followup_admission_timeout_is_not_retried_by_status_or_request_replay(system, monkeypatch):
+    m, api, store, root = system
+    original = await submit(m, 'one', continue_after_call=True)
+    api.runs[original['run_id']].update(status='completed', output='Original result', pending_steer='Change the time')
+    native_request = api.request
+    attempts = []
+    async def request(method, path, **kw):
+        if path == 'v1/runs':
+            attempts.append(kw)
+            raise TimeoutError('admission outcome unknown')
+        return await native_request(method, path, **kw)
+    monkeypatch.setattr(api, 'request', request)
+    await m.refresh(original)
+    await asyncio.sleep(0)
+    replay = await submit(m, 'one', continue_after_call=True)
+    status = await m.refresh(original)
+    assert replay['status'] == status['status'] == 'uncertain'
+    assert len(attempts) == 1
+    assert status['pending_steer'] == 'Change the time'
 
 
 async def test_fresh_authority_hangup_expiry_and_revoke_individually(system):

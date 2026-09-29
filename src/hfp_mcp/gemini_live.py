@@ -1874,6 +1874,10 @@ def _live_config(
             "outcome. Use hermes_task status for progress, not a duplicate submission. Infer task "
             "relationships and continuation from the request; follow-ups belong to the original "
             "task. Announce only confirmed outcomes and delivery destinations. "
+            "A correction accepted for delivery is still pending. Do not promise a revised "
+            "time or other changed outcome until task status confirms that specific change. "
+            "An earlier task result does not confirm a later correction; pending_steer means "
+            "the correction has not yet been applied. "
         )
     if "phone_session" in allowed_tools:
         system_instruction += (
