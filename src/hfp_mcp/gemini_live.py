@@ -117,9 +117,10 @@ def gemini_output_transcription_enabled() -> bool:
     return _env_bool("HFP_GEMINI_OUTPUT_TRANSCRIPTION", True)
 
 
-def gemini_thinking_level() -> str:
-    value = os.getenv("HFP_GEMINI_THINKING_LEVEL", "minimal").strip().lower()
-    return value if value in {"minimal", "low", "medium", "high"} else "minimal"
+def gemini_thinking_level() -> str | None:
+    """Return the explicit override; the SDK/provider validates compatibility."""
+    value = os.getenv("HFP_GEMINI_THINKING_LEVEL", "").strip().lower()
+    return value or None
 
 
 def gemini_tool_deadline_seconds() -> float:
@@ -1891,18 +1892,26 @@ def _live_config(
             f"{clean_context}"
         )
     declarations = _function_declarations(allowed_tools)
+    standard_38_live = gemini_live_model().removeprefix("models/") == "gemini-3.8-live"
+    if standard_38_live:
+        # 3.8 defaults to non-blocking tools. Preserve the existing contract:
+        # each tool receipt is returned before the model continues its turn.
+        for declaration in declarations:
+            declaration["behavior"] = "BLOCKING"
     config: dict[str, Any] = {
         "response_modalities": ["AUDIO"],
         "system_instruction": system_instruction,
-        "thinking_config": {
-            "thinking_level": gemini_thinking_level(),
-            "include_thoughts": False,
-        },
         "context_window_compression": {
             "trigger_tokens": 25000,
             "sliding_window": {"target_tokens": 8000},
         },
     }
+    thinking_level = gemini_thinking_level()
+    if thinking_level is not None:
+        config["thinking_config"] = {
+            "thinking_level": thinking_level,
+            "include_thoughts": False,
+        }
     if gemini_input_transcription_enabled():
         config["input_audio_transcription"] = {}
     if gemini_output_transcription_enabled():

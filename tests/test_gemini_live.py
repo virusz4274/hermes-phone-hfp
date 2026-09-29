@@ -758,7 +758,9 @@ def test_gemini_full_transcript_is_opt_in_but_summary_remains_available():
     assert manager._transcript_events("call-1")[0]["text"] == "[redacted]"
 
 
-def test_installed_sdk_accepts_full_gemini_31_live_config():
+def test_installed_sdk_accepts_full_gemini_31_live_config(monkeypatch):
+    monkeypatch.setenv("HFP_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
+    monkeypatch.setenv("HFP_GEMINI_THINKING_LEVEL", "minimal")
     google_types = pytest.importorskip("google.genai.types")
     config = gemini_live._live_config(
         "current call context",
@@ -775,7 +777,56 @@ def test_installed_sdk_accepts_full_gemini_31_live_config():
         assert declaration.behavior is None
 
 
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
+@pytest.mark.parametrize("thinking_level", [None, "", "minimal", "high"])
+def test_gemini_38_live_config_preserves_explicit_thinking(monkeypatch, model, thinking_level):
+    google_types = pytest.importorskip("google.genai.types")
+    monkeypatch.setenv("HFP_GEMINI_LIVE_MODEL", model)
+    if thinking_level is None:
+        monkeypatch.delenv("HFP_GEMINI_THINKING_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("HFP_GEMINI_THINKING_LEVEL", thinking_level)
+    monkeypatch.setenv("HFP_GEMINI_LIVE_VOICE", "Achernar")
+
+    config = gemini_live._live_config("call context", "resume-handle", {"ask_hermes"})
+
+    if thinking_level:
+        # The provider rejects this for 3.8; do not silently discard the user's override.
+        assert config["thinking_config"]["thinking_level"] == thinking_level
+    else:
+        assert "thinking_config" not in config
+    assert gemini_live.gemini_thinking_level() == (thinking_level or None)
+    validated = google_types.LiveConnectConfig(**config)
+    assert validated.speech_config.voice_config.prebuilt_voice_config.voice_name == "Achernar"
+    assert validated.session_resumption.handle == "resume-handle"
+    assert validated.tools[0].function_declarations[0].behavior.value == "BLOCKING"
+
+
+@pytest.mark.parametrize("thinking_level, expected", [
+    (None, None), ("", None), ("  ", None), ("invalid", "invalid"),
+    ("minimal", "minimal"), ("low", "low"), ("medium", "medium"),
+    (" HIGH ", "high"),
+])
+def test_gemini_31_thinking_is_an_optional_override(monkeypatch, thinking_level, expected):
+    monkeypatch.setenv("HFP_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
+    if thinking_level is None:
+        monkeypatch.delenv("HFP_GEMINI_THINKING_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("HFP_GEMINI_THINKING_LEVEL", thinking_level)
+
+    config = gemini_live._live_config("", None, set())
+
+    assert gemini_live.gemini_thinking_level() == expected
+    if expected is None:
+        assert "thinking_config" not in config
+    else:
+        assert config["thinking_config"] == {
+            "thinking_level": expected, "include_thoughts": False,
+        }
+
+
 def test_gemini_live_config_exposes_voice_and_transcription_controls(monkeypatch):
+    monkeypatch.setenv("HFP_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
     monkeypatch.setenv("HFP_GEMINI_LIVE_VOICE", "Autonoe")
     monkeypatch.setenv("HFP_GEMINI_INPUT_TRANSCRIPTION", "false")
     monkeypatch.setenv("HFP_GEMINI_OUTPUT_TRANSCRIPTION", "true")
