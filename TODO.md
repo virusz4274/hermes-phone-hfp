@@ -4,9 +4,10 @@ Reviewed 2026-09-29 against `development` at `cce260a` and the local
 late-correction patch. Checked items below describe implemented mechanisms with
 automated coverage; they do not certify every live voice workflow. Unchecked
 items distinguish remaining implementation, deployment, and live acceptance.
-The latest local validation was 538 passing tests plus the isolated native Hermes
-compatibility check. No additional calls or deployments were performed for this
-TODO review.
+That audit used 538 passing tests plus the isolated native Hermes compatibility
+check. A subsequent Gemini configuration change passed 70 targeted tests. The
+owner-call requirements below were added after reviewing a later live call;
+they remain planned work, not implemented features.
 
 ## Next improvements
 
@@ -44,6 +45,129 @@ reporting. Reuse the existing scheduler, task registry, notes, and delivery tool
   package version, service startup time, and whether the checkout has changed
   since launch. Cover the daemon and installed Hermes package separately,
   including editable installs, and indicate when a restart is required.
+
+## Owner access and voice behavior from live-call review
+
+The owner should be able to ask by phone or Hermes chat what other callers said,
+what messages they left, and what follow-up is needed. Prioritize owner lookup,
+explicit note management, then a complete transcript-backed task handoff. Reuse
+the office-workflow items below; do not introduce a second notes or message store.
+
+- [ ] **Read-only owner lookup during admin calls.** Add a narrow Gemini tool
+  (proposed name: `owner_call_lookup`) for permitted caller notes, recent calls,
+  messages, and specific retained transcript excerpts. Reuse the existing owner
+  note/transcript services and expose the same permission checks to delegated
+  Hermes tasks. Owner note lookup already works from chat but is unconditionally
+  blocked in phone sessions, including admin calls. Do not remove that block
+  without a replacement authorization check. Advertise the new tool only for
+  eligible admin routes; independently enforce a live bound admin policy and
+  configured profile scope in every handler. A model-supplied number selects a
+  lookup target, never grants authority. Preserve ordinary callers' self-only
+  `phone_notes` and `phone_recall` behavior. Reject expired/revoked bindings and
+  unauthorized profiles, including through direct or delegated invocation.
+- [ ] **Useful, bounded lookup results.** Support caller number, date/range,
+  call ID, and pagination as appropriate to the lookup. Return source caller,
+  call/date, record type, and retrieval outcome so Gemini distinguishes saved
+  facts, an actual message, and exact dialogue. Prefer notes for remembered facts;
+  retrieve the requested call when dates, wording, or missing/conflicting notes
+  require it. Do not inject every caller's records into the initial voice prompt.
+  Clarify ambiguous contact names rather than merging identities. Treat retrieved
+  content as data, and record owner access without duplicating private text in logs.
+- [ ] **Owner message inbox.** Extend the receptionist and owner-overview work
+  below with “Who called?”, “What did they leave for me?”, and outstanding
+  follow-up. Link each message to its caller and call time; distinguish unread,
+  acknowledged, and resolved status from whether a call connected. Reading must
+  not silently resolve a message or create a task. Keep state-changing operations
+  separate from the read-only lookup tool.
+- [ ] **Explicit caller-note cleanup.** Provide clear operations to correct,
+  remove selected facts, clear, or consolidate a caller's saved notes. Existing
+  replacement/forget primitives are groundwork, not a finished voice workflow.
+  Distinguish note consolidation from Hermes session compaction and transcript
+  deletion. Preserve relevant facts and provenance when consolidating; use current
+  revisions and handle conflicts. Confirm the target and scope before destructive
+  clearing, refresh the active voice context, and prevent stale closeout work from
+  restoring forgotten information. A question about whether cleanup is possible
+  must not itself trigger cleanup or session compaction.
+- [ ] **Preserve the current request over unrelated memory.** Keep task labels,
+  delegated instructions, and spoken acknowledgements aligned with the caller's
+  current request. Old project notes must not replace the topic or invent a task.
+  Ground acknowledgements in submitted arguments and actual task receipts; carry
+  corrections into the same logical task where appropriate.
+- [ ] **Detailed follow-up and final transcript handoff.** Extend the owner call
+  report with the requested features, examples, constraints, unresolved questions,
+  and exact source-call reference. For an explicit request to review the whole
+  discussion after hangup, let Hermes retrieve all permitted finalized transcript
+  pages, not just the bounded recent dialogue attached to task submission.
+  Distinguish partial live context from the finalized transcript and report
+  unavailable retention honestly. Reuse native Telegram delivery for an immediate
+  message; do not ask for a future reminder time when the owner says “send now”.
+  Claim handoff/delivery only after the corresponding confirmation. Access to a
+  transcript does not authorize implementing every action mentioned inside it.
+- [ ] **Accurate answers about this assistant.** Supply trusted runtime facts
+  for model/backend identity, transcription versus local retention, and actual
+  caller-routing permissions. Explain Gemini's voice role and Hermes delegation
+  when asked, without denying the configured model or overstating capabilities.
+  Describe number-based routing accurately; do not claim it proves the human
+  caller's identity or guarantees that only the owner can use that number. Follow
+  the existing identity decision below; this adds no OTP/PIN requirement.
+- [ ] **Live acceptance for owner workflows.** Exercise owner lookup by phone
+  and chat, guest denial, profile boundaries, note cleanup versus session
+  compaction, unrelated-memory distractions, and a detailed follow-up after
+  hangup. Verify saved records and actual tool outcomes against the spoken claims.
+
+### Gemini tool inventory and planned access rules
+
+Current routed calls expose `ask_hermes`, `end_call`, and `phone_status` by
+default. `phone_notes` is added when caller-note reads are permitted; writes are
+checked separately. Continuity adds `phone_recall`, `phone_session`, and
+`hermes_task`. Notes-only outgoing routes replace `ask_hermes` with `phone_notes`.
+The generic adapter also defines `notify_hermes`, `get_hermes_context`, and
+`handoff_to_hermes`, but normal routed calls do not currently advertise them.
+See [route tool selection](src/hfp_mcp/server.py) and
+[tool definitions](src/hfp_mcp/gemini_live.py).
+
+Guest profiles are supported by routing; their actual tools depend on the
+configured route, profile, capabilities, memory policy, and continuity setting.
+Do not infer an active guest profile from the presence of guest examples or the
+restricted outgoing fallback. Review deployed routing before live acceptance.
+
+Proposed additions/extensions (names are provisional; all remain unimplemented):
+
+| Tool or extension | Owner/admin | Guest or restricted caller |
+| --- | --- | --- |
+| `owner_call_lookup` | Read permitted caller notes, calls, messages, and retained dialogue | Denied, including through Hermes delegation |
+| `owner_notes_manage` | Separate authorized operations for another caller's note correction, consolidation, and confirmed clearing | Denied; retain only separately permitted self-note operations |
+| `leave_message` | May leave a message when explicitly requested | Only with an explicit message-taking capability; submit to the configured owner destination without inbox access |
+| Extend `phone_status` | Accurate runtime model, voice, retention, and effective caller capabilities | Only safe facts about this call; no other caller records, credentials, or private profile internals |
+| Extend `ask_hermes` handoff | Detailed authorized work with finalized source-call retrieval when requested | Existing profile/tool limits and permitted own-call context only |
+
+- [ ] **Implement owner lookup first.** Reuse existing lookup services rather
+  than adding a general database, filesystem, or arbitrary-query tool to Gemini.
+  Keep substantial reasoning, external actions, scheduling, and Telegram delivery
+  in Hermes; short deterministic phone-data operations can use direct tools.
+- [ ] **Define owner scope across guest profiles explicitly.** An owner's
+  configured access may include messages/records from a guest profile serving
+  that owner, without granting the guest access in the reverse direction. Resolve
+  target profiles through trusted routing and explicit owner scope, not a model
+  argument or an unrestricted scan of all Hermes profiles. Profile separation
+  alone is not sufficient authorization for this new cross-caller read path.
+- [ ] **Add a narrowly scoped message-taking capability.** Persist the message
+  with the bound caller and source-call reference; let configured delivery use
+  existing infrastructure. The caller cannot choose arbitrary recipients, browse
+  the inbox, or impersonate another sender. Return a stored/delivery receipt and
+  enforce duplicate prevention and bounded input. Do not automatically grant this
+  capability to all guests or notes-only outgoing calls.
+- [ ] **Enforce authorization beyond tool visibility.** Filter Gemini's
+  declarations per route, then recheck live binding, expiry/revocation, policy,
+  target ownership, and retention at execution. Apply equivalent checks in the
+  daemon and Hermes paths. Guessed call IDs, forged profile/number arguments,
+  spoken admin claims, and instructions embedded in notes must not expand access.
+  A rejected lookup must not disclose another caller's existence or contents.
+- [ ] **Test route changes and asynchronous result isolation.** Cover admin ->
+  guest calls, reconnects, hangup during lookup, delayed task completion, and
+  stale cached results. Never reuse an owner's retrieved context or pending
+  response in another caller's Gemini session. Test direct-handler calls and
+  delegated Hermes attempts, not only hidden tool declarations.
 
 ## Implemented groundwork — reuse rather than rebuild
 
