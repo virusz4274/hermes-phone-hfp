@@ -191,6 +191,35 @@ The controller gives missing caller-ID data up to two seconds to arrive before r
 
 ## Caller memory
 
+### Admin lookup during calls
+
+Gemini's `owner_call_lookup` and Hermes's `hfp_phone_owner_lookup` share the same
+read-only authorization service. The default scope is the admin caller's configured
+endpoint. Explicit additional access uses endpoint names, for example:
+
+```yaml
+phone:
+  owner_access:
+    personal: [office]
+```
+
+This grants `personal` access to `office`; it does not grant the reverse direction.
+Both endpoints must already exist. No guest profile is required to enable owner
+lookup. Guest permissions remain caller-scoped; existing arbitrary-number owner
+note tools remain blocked during calls.
+
+Select `record_kind: notes` (default), `calls`, or `transcripts`, optionally with
+a normalized `number`, exact `call_id`, allowed `endpoint`, and timezone-aware
+`start` (inclusive) / `end` (exclusive). Notes span calls and cannot be filtered by
+call ID. Use notes first for remembered facts; transcript excerpts require full
+transcript retention. Limit defaults to 20 and cannot exceed 100. Responses stay
+within 12,000 characters; large texts have offsets and continuation cursors. Repeat
+the same selectors with `cursor` until `has_more` is false. If a partially read
+note changes, restart the lookup. Call attribution is recorded independently of
+continuity. Legacy records lacking trusted endpoint attribution are omitted.
+Authority is checked before and after asynchronous reads; delayed voice results
+are discarded if the active caller or conversation changes.
+
 ### Outgoing calls with a purpose
 
 Owner-requested outgoing calls do not require a destination entry in `phone.numbers`.
@@ -221,8 +250,9 @@ arrange a meeting tomorrow afternoon.” Hermes should call `hfp_phone_start_cal
 with the number and a `purpose` containing all requested objectives and relevant
 details from your chat. Gemini receives that brief, the recipient's saved notes,
 and previous phone dialogue when continuity is enabled. It cannot see your full
-owner chat. It waits for the recipient to speak, introduces itself, and follows
-the brief. Names, relationships, and previous conversations are used only when
+owner chat. The cached outgoing opening identifies Hermes after answer; Gemini
+then waits for the recipient's reply and follows the brief. Names, relationships,
+and previous conversations are used only when
 supplied or remembered, never invented.
 
 The optional `purpose` is text of at most 4,000 characters. The HTTP equivalent is
@@ -250,8 +280,28 @@ Hermes's scheduler. The daemon owns the future dial, so the callback survives a
 Hermes gateway restart and does not depend on an unauthenticated cron session.
 The destination must differ from the paired handset's own SIM number, which
 remains blocked from self-calling. A failed or uncertain dial is recorded and is
-never retried automatically. Cached incoming greetings are separate from this
-workflow.
+never retried automatically.
+
+Incoming Gemini calls wait for the caller's hello or opening request; Hermes then
+responds naturally. Outgoing calls and scheduled callbacks play a cached spoken
+opening once after answer and audio-stream acquisition: “Hello, this is Hermes,
+an AI assistant.” The clip uses the same Gemini HFP stream and paced playback
+queue. It does not request a model-generated startup turn, create another audio
+owner, make a TTS request during the call, or hang up when playback finishes.
+
+After the recipient replies, Gemini follows the supplied purpose without repeating
+the cached introduction unless clarification is needed. Recipient microphone
+activity interrupts the local clip; a model reply also clears any remaining local
+playback. Reconnects and conversation resets do not replay it. Queued/interrupted/
+sent-to-HFP receipts are available in Gemini status and final call metrics; sending
+audio is not confirmation that the recipient heard it. A fully sent spoken clip
+is also identified as `cached_outgoing_opening` in retained transcripts.
+
+Set `HFP_GEMINI_OUTGOING_GREETING=chime` for a short cue followed by Gemini's spoken
+introduction after recipient speech, or `off` for the prior recipient-first
+behavior. The default is `spoken`. Incoming behavior is unaffected. Startup
+hangup protection remains active, so the opening itself and retained dialogue
+cannot authorize ending a new call before current caller speech.
 
 For a text reminder, `hfp_phone_schedule_reminder` creates a native Hermes cron
 job delivered to the configured Telegram home channel, even when the request
@@ -278,13 +328,37 @@ scans remembered appointment facts and turns them into schedules.
 `hfp_phone_status` includes pending callbacks and the ten most recent terminal
 outcomes. `hfp_phone_cancel_callback` cancels a pending callback and pauses its
 linked Telegram job. A firing call cannot be cancelled this way. For a changed
-time, cancel successfully before creating a replacement; manage standalone
+time, use `hfp_phone_reschedule_callback` with the exact `callback_id`, current
+`expected_revision`, a stable `request_id`, and ISO-8601 `run_at` including its
+timezone offset. Callback and linked reminder identities stay the same. Only
+confirm success when `verification.status` is `applied`; report the requested
+and effective times and missing reminder explicitly otherwise. UTC epoch times
+and callback ISO timestamps are returned with timezone information. Stale
+revisions, firing/terminal callbacks and unresolved reminder linkage are rejected.
+Unresolved changes hold the callback from firing, survive restart, and reconcile
+the existing job without creating another call or notification. Manage standalone
 reminders with native `cronjob_manage`. Report partial cancellation failures.
 Calls more than five minutes overdue after downtime are marked failed instead
 of being dialled late. A successful callback result means voice became ready,
 not that the user heard the entire reminder. Callback/card creation is not an
 atomic transaction: report partial failures and keep returned IDs rather than
 automatically resubmitting both actions.
+
+For repeatable callback creation, supply a stable `request_id` with an exact
+`run_at` and identical details. Reminder creation is claimed durably before native
+I/O; an uncertain creation/linkage returns a partial result on replay and never
+creates another reminder. Inspect the retained IDs before acting again.
+
+Incoming Gemini sessions wait for caller speech rather than requesting an
+automatic introduction. Outgoing sessions use the cached opening described above
+before waiting for a reply. Openings are not replayed on reconnect or context
+reset; caller speech retains normal interruption handling.
+If the caller asks to wait for task confirmation before hangup, that request is
+tracked explicitly and assistant-initiated hangup waits for authoritative task
+completion. An explicit caller request to hang up, remote hangup, and configured
+call limits still apply. Task acceptance, note reads/saves, reminders and calendar
+bookings each have distinct receipts; a calendar booking needs independently
+configured Hermes tools.
 
 ### Notes from owner chat
 
@@ -509,6 +583,12 @@ first provider/input/output audio timings. Caller bindings retain their ten-seco
 expiry. Heartbeats tolerate temporary gateway delays only within the last confirmed
 lease (with a half-second safety margin); rejection or failure to renew before
 that deadline stops the call. A single three-second delay no longer triggers a hangup.
+HFP capture and Gemini setup run concurrently. Up to five seconds of pre-ready
+PCM is held in a separate RAM-only startup buffer and drained once into the first
+Live connection. The normal input queue stays capped at 200 ms. Startup overflow
+drops the oldest frames and is reported in `startup_input_buffer`; remaining
+startup audio is discarded on provider disconnect, context reset or call end,
+never replayed into another session. This buffer does not enable call recording.
 Sending audio to HFP is not an exact
 measurement of when the handset plays it. No tool prompts or transcript text
 are included in timing records.

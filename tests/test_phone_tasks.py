@@ -68,6 +68,37 @@ async def submit(m, key, **kw):
     return m.registry.get(result['task_id']) if result.get('task_id') else result
 
 
+@pytest.mark.parametrize('verified', [True, False])
+async def test_completion_leads_with_observed_schedule_receipt(system, verified):
+    m, api, store, root = system
+    row = await submit(m, 'scheduled')
+    m.registry.schedule_receipt(row['run_id'], {'callback_id': 'cb', 'verified': True, 'callback_run_at': 100})
+    m.registry.schedule_receipt(row['run_id'], {'callback_id': 'cb', 'verified': verified,
+        'requested_run_at': 200, 'callback_run_at': 200 if verified else 100, 'timezone': 'UTC'})
+    api.runs[row['run_id']].update(status='completed', output='Everything is done' + 'x' * 12000)
+    result = await m.refresh(row)
+    assert result['status'] == ('completed' if verified else 'failed')
+    assert '"requested_run_at": 200' in result['message'][:900]
+    assert len(result['schedule_receipts']) == 1
+    assert 'not fully verified' in result['message'] if not verified else 'Verified schedule outcome' in result['message']
+
+
+async def test_correction_completion_does_not_reuse_original_schedule_receipt(system):
+    m, api, store, root = system
+    row = await submit(m, 'scheduled')
+    m.registry.schedule_receipt(row['run_id'], {'callback_id': 'cb', 'verified': True, 'callback_run_at': 100})
+    api.runs[row['run_id']].update(status='completed', output='Done', pending_steer='Move to 200')
+    follow = await m.refresh(row)
+    await asyncio.sleep(0)
+    follow = m.registry.get(row['task_id'])
+    m.registry.schedule_receipt(follow['run_id'], {'callback_id': 'cb', 'verified': False,
+        'requested_run_at': 200, 'callback_run_at': 100})
+    api.runs[follow['run_id']].update(status='completed', output='Moved successfully', pending_steer=None)
+    result = await m.refresh(row)
+    assert result['status'] == 'failed' and result['message'].startswith('Schedule change was not fully verified')
+    assert '"requested_run_at": 200' in result['message']
+
+
 async def test_default_long_task_reuses_primary_overlap_lazy_and_capacity(system):
     m, api, store, root = system
     first = await submit(m, 'one', continue_after_call=True)

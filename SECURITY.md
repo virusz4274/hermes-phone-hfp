@@ -25,12 +25,25 @@ minimal reproduction using synthetic callers. No response-time guarantee is made
 - Gemini Live sends voice to Google. Classic voice sends speech to the selected
   STT/TTS providers, and Hermes sends task content to its configured model provider.
   Local transcript opt-out does not disable provider processing.
+- Gemini startup briefly buffers up to five seconds of raw audio in memory while
+  its first connection is being established. It is sent once to that connection;
+  unsent startup audio is discarded on disconnect, reset or call end. It is not
+  written to disk or retained as a recording.
 - Full transcripts are off by default. Route-level continuity is a separate opt-in
   that stores dialogue; active dialogue lasts until reset and archived dialogue has
   its own retention. Caller notes remain until explicitly forgotten. See
   [data retention](docs/phone-routing.md#conversation-continuity).
 - Local files are private to the service account, not encrypted against that
   account or a machine administrator. Backups may retain deleted live data.
+
+Admin lookup defaults to the caller's configured endpoint. `phone.owner_access`
+explicitly grants access to additional existing endpoints; grants are directional.
+Both daemon and gateway recheck live admin bindings, including delegated runs,
+before returning data. Full transcript retention still controls transcript lookup.
+Trusted call-source metadata (call ID, routed number, caller hash, profile and
+endpoint) follows diagnostic retention even when conversation continuity is off.
+Legacy calls without reliable endpoint attribution are omitted from scoped lookup.
+No additional lookup grant is inferred from guest configuration or saved notes.
 
 Automatic note closeout uses a separate private credential created from an
 admitted call's binding. It cannot run tools, select another caller/profile, or

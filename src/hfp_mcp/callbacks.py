@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .contracts import normalize_phone_number, validate_call_purpose, validate_request_id
@@ -23,13 +25,20 @@ TERMINAL = {"completed", "failed", "uncertain", "cancelled"}
 log = logging.getLogger(__name__)
 
 
+class CallbackConflict(ValueError):
+    """A callback changed or is no longer eligible for a schedule mutation."""
+
+
 class CallbackScheduler:
     """Persist and fire one-shot callbacks without replaying uncertain calls."""
 
-    def __init__(self, path: Path, fire, *, region: str = "IN") -> None:
+    def __init__(self, path: Path, fire, *, region: str = "IN", reconcile_reminder=None) -> None:
         self.path = Path(path)
         self.fire = fire
         self.region = region
+        self.reconcile_reminder = reconcile_reminder
+        self._operation_locks = {}
+        self._next_reconciliation = 0.0
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._db = sqlite3.connect(self.path, check_same_thread=False)
@@ -56,6 +65,19 @@ class CallbackScheduler:
         with self._db:
             if 'reminder_job_id' not in {r[1] for r in self._db.execute('PRAGMA table_info(phone_callbacks)')}:
                 self._db.execute('ALTER TABLE phone_callbacks ADD COLUMN reminder_job_id TEXT')
+            if 'revision' not in {r[1] for r in self._db.execute('PRAGMA table_info(phone_callbacks)')}:
+                self._db.execute('ALTER TABLE phone_callbacks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
+            if 'verification_json' not in {r[1] for r in self._db.execute('PRAGMA table_info(phone_callbacks)')}:
+                self._db.execute('ALTER TABLE phone_callbacks ADD COLUMN verification_json TEXT')
+            if 'reminder_attempted' not in {r[1] for r in self._db.execute('PRAGMA table_info(phone_callbacks)')}:
+                self._db.execute('ALTER TABLE phone_callbacks ADD COLUMN reminder_attempted INTEGER NOT NULL DEFAULT 0')
+            self._db.execute('''CREATE TABLE IF NOT EXISTS callback_operations (
+                request_id TEXT PRIMARY KEY, callback_id TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL, requested_run_at REAL NOT NULL,
+                previous_run_at REAL NOT NULL, status TEXT NOT NULL,
+                reminder_run_at REAL, error TEXT, updated_at REAL NOT NULL)''')
+            if 'response_json' not in {r[1] for r in self._db.execute('PRAGMA table_info(callback_operations)')}:
+                self._db.execute('ALTER TABLE callback_operations ADD COLUMN response_json TEXT')
         # A daemon restart while a callback was being fired leaves its outcome
         # unknowable.  Never dial it a second time automatically.
         now = time.time()
@@ -89,6 +111,8 @@ class CallbackScheduler:
         self.close_db()
 
     def schedule(self, *, request_id: str, number: str, purpose: str, run_at: float) -> dict:
+        if not isinstance(request_id, str):
+            raise ValueError('request_id must be text')
         request_id = validate_request_id(request_id)
         number = normalize_phone_number(number, self.region)
         purpose = validate_call_purpose(purpose)
@@ -112,6 +136,8 @@ class CallbackScheduler:
             "created_at": now,
             "updated_at": now,
             "reminder_job_id": None,
+            "revision": 0,
+            "verification": None,
         }
         with self._lock, self._db:
             existing = self._db.execute(
@@ -130,12 +156,107 @@ class CallbackScheduler:
                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (callback_id, request_id, number, purpose, run_at, "scheduled", None, None, now, now),
             )
-        return row
+            return self.get(callback_id)
+
+    def get(self, callback_id):
+        with self._lock:
+            row = self._db.execute('SELECT * FROM phone_callbacks WHERE id=?', (callback_id,)).fetchone()
+            if not row:
+                raise ValueError('unknown callback')
+            result = self._row(row)
+            operation = self._db.execute('SELECT request_id,requested_run_at,previous_run_at,status,reminder_run_at,error '
+                'FROM callback_operations WHERE callback_id=? ORDER BY updated_at DESC LIMIT 1', (callback_id,)).fetchone()
+            if operation:
+                result['schedule_change'] = dict(zip(
+                    ('request_id', 'requested_run_at', 'previous_run_at', 'status', 'reminder_run_at', 'error'), operation))
+                result['schedule_change']['requested_run_at_iso'] = datetime.fromtimestamp(operation[1], timezone.utc).isoformat()
+            return result
+
+    def begin_reschedule(self, callback_id, *, request_id, expected_revision, run_at):
+        if not isinstance(request_id, str):
+            raise ValueError('request_id must be text')
+        request_id = validate_request_id(request_id)
+        if type(expected_revision) is not int or not isinstance(run_at, (int, float)) or isinstance(run_at, bool) or not math.isfinite(run_at):
+            raise ValueError('expected_revision must be an integer and run_at a finite timestamp')
+        with self._lock, self._db:
+            self._db.execute('BEGIN IMMEDIATE')
+            old = self._db.execute('SELECT callback_id,expected_revision,requested_run_at,response_json FROM callback_operations WHERE request_id=?', (request_id,)).fetchone()
+            if old:
+                if old[:3] != (callback_id, expected_revision, run_at):
+                    raise ValueError('request_id was already used for another schedule change')
+                return json.loads(old[3]) if old[3] else self.get(callback_id)
+            row = self.get(callback_id)
+            if row['revision'] != expected_revision or row['status'] != 'scheduled':
+                raise CallbackConflict('callback revision changed or callback is firing, terminal, or being rescheduled')
+            attempted = self._db.execute('SELECT reminder_attempted FROM phone_callbacks WHERE id=?', (callback_id,)).fetchone()[0]
+            if attempted and row['reminder_job_id'] is None:
+                raise CallbackConflict('reminder creation or linkage is unresolved; inspect the original schedule before moving it')
+            if not time.time() < run_at <= time.time() + 366 * 86400:
+                raise ValueError('run_at must be in the future and within one year')
+            self._db.execute('INSERT INTO callback_operations (request_id,callback_id,expected_revision,requested_run_at,previous_run_at,status,reminder_run_at,error,updated_at) VALUES (?,?,?,?,?,?,NULL,NULL,?)',
+                (request_id, callback_id, expected_revision, run_at, row['run_at'], 'pending', time.time()))
+            self._db.execute("UPDATE phone_callbacks SET status='rescheduling',revision=revision+1,updated_at=? WHERE id=?", (time.time(), callback_id))
+            return self.get(callback_id)
+
+    def record_verification(self, callback_id, expected_revision, verification):
+        if not isinstance(verification, dict) or type(expected_revision) is not int:
+            raise ValueError('invalid schedule verification')
+        with self._lock, self._db:
+            row = self.get(callback_id)
+            if row['revision'] != expected_revision or row['status'] != 'scheduled':
+                raise CallbackConflict('callback changed before verification was recorded')
+            self._db.execute('UPDATE phone_callbacks SET verification_json=? WHERE id=?',
+                (json.dumps({**verification, 'observed_at': time.time()}), callback_id))
+        return self.get(callback_id)
+
+    async def reconcile(self, callback_id):
+        async with self._operation_locks.setdefault(callback_id, asyncio.Lock()):
+            row = self.get(callback_id)
+            operation = row.get('schedule_change')
+            if not operation or operation['status'] in {'applied', 'failed'}:
+                return row
+            requested = operation['requested_run_at']
+            try:
+                if row['reminder_job_id']:
+                    if self.reconcile_reminder is None:
+                        raise RuntimeError('reminder reconciliation unavailable')
+                    observed = await self.reconcile_reminder(row)
+                else:
+                    observed = {'verified': True, 'run_at': None, 'missing': True}
+                reminder_time = observed.get('run_at')
+                from .reminders import same_instant
+                verified = observed.get('verified') is True
+                success = verified and (observed.get('missing') or same_instant(reminder_time, requested))
+                old_unchanged = verified and same_instant(reminder_time, operation['previous_run_at']) and observed.get('write_failed')
+                status = 'applied' if success else 'failed' if old_unchanged else 'partial'
+                error = None if success else observed.get('error', 'Reminder schedule could not be verified')
+            except asyncio.CancelledError:
+                # The durable pending receipt prevents firing and is reconciled after restart.
+                raise
+            except Exception:
+                status, reminder_time, error = 'uncertain', None, 'Reminder update outcome is unverified; callback remains held'
+            with self._lock, self._db:
+                self._db.execute('BEGIN IMMEDIATE')
+                self._db.execute('UPDATE callback_operations SET status=?,reminder_run_at=?,error=?,updated_at=? WHERE request_id=?',
+                    (status, reminder_time, error, time.time(), operation['request_id']))
+                if status in {'applied', 'failed'}:
+                    effective = requested if status == 'applied' else operation['previous_run_at']
+                    self._db.execute("UPDATE phone_callbacks SET status='scheduled',run_at=?,error=?,revision=revision+1,updated_at=? WHERE id=? AND status='rescheduling'",
+                        (effective, error, time.time(), callback_id))
+                self._db.execute('UPDATE phone_callbacks SET verification_json=? WHERE id=?',
+                    (json.dumps({'status': status, 'requested_run_at': requested,
+                        'callback_run_at': self.get(callback_id)['run_at'], 'reminder_run_at': reminder_time,
+                        'verified': status == 'applied', 'observed_at': time.time()}), callback_id))
+                if status in {'applied', 'failed'}:
+                    snapshot = self.get(callback_id)
+                    self._db.execute('UPDATE callback_operations SET response_json=? WHERE request_id=?',
+                        (json.dumps(snapshot), operation['request_id']))
+            return self.get(callback_id)
 
     def cancel(self, callback_id):
         with self._lock, self._db:
             self._db.execute(
-                "UPDATE phone_callbacks SET status='cancelled', updated_at=? WHERE id=? AND status='scheduled'",
+                "UPDATE phone_callbacks SET status='cancelled', revision=revision+1, updated_at=? WHERE id=? AND status='scheduled'",
                 (time.time(), callback_id),
             )
             row = self._db.execute('SELECT * FROM phone_callbacks WHERE id=?', (callback_id,)).fetchone()
@@ -151,11 +272,17 @@ class CallbackScheduler:
             raise ValueError('invalid reminder job ID')
         with self._lock, self._db:
             updated = self._db.execute(
-                'UPDATE phone_callbacks SET reminder_job_id=? WHERE id=? AND (reminder_job_id IS NULL OR reminder_job_id=?)',
+                "UPDATE phone_callbacks SET revision=revision+CASE WHEN reminder_job_id IS NULL THEN 1 ELSE 0 END,reminder_job_id=? WHERE id=? AND status='scheduled' AND (reminder_job_id IS NULL OR reminder_job_id=?)",
                 (job_id, callback_id, job_id),
             )
             if not updated.rowcount:
                 raise ValueError('unknown callback or reminder already linked')
+
+    def claim_reminder(self, callback_id):
+        # An interrupted creation is uncertain, never permission to duplicate it.
+        with self._lock, self._db:
+            return bool(self._db.execute("UPDATE phone_callbacks SET reminder_attempted=1 WHERE id=? "
+                "AND status='scheduled' AND reminder_job_id IS NULL AND reminder_attempted=0", (callback_id,)).rowcount)
 
     def list(self, *, include_terminal: bool = True) -> list[dict]:
         query = "SELECT * FROM phone_callbacks"
@@ -165,7 +292,7 @@ class CallbackScheduler:
             args = tuple(TERMINAL)
         query += " ORDER BY run_at, created_at"
         with self._lock:
-            return [self._row(row) for row in self._db.execute(query, args).fetchall()]
+            return [self.get(row[0]) for row in self._db.execute(query, args).fetchall()]
 
     @staticmethod
     def _row(row) -> dict:
@@ -181,12 +308,15 @@ class CallbackScheduler:
             "number": row[2],
             "purpose": row[3],
             "run_at": row[4],
+            "run_at_iso": datetime.fromtimestamp(row[4], timezone.utc).isoformat(),
             "status": row[5],
             "result": result,
             "error": error,
             "created_at": row[8],
             "updated_at": row[9],
             "reminder_job_id": row[10],
+            "revision": row[11],
+            "verification": json.loads(row[12]) if row[12] else None,
         }
 
     def _claim_due(self) -> dict | None:
@@ -209,7 +339,7 @@ class CallbackScheduler:
                 return None
             now = time.time()
             self._db.execute(
-                "UPDATE phone_callbacks SET status='firing', updated_at=? WHERE id=?",
+                "UPDATE phone_callbacks SET status='firing', revision=revision+1, updated_at=? WHERE id=?",
                 (now, row[0]),
             )
             self._db.commit()
@@ -226,6 +356,13 @@ class CallbackScheduler:
 
     async def _watch(self) -> None:
         while True:
+            if self.reconcile_reminder and time.monotonic() >= self._next_reconciliation:
+                self._next_reconciliation = time.monotonic() + 10
+                for row in self.list(include_terminal=False):
+                    if row['status'] == 'rescheduling' and not self._operation_locks.get(row['id'], asyncio.Lock()).locked():
+                        task = asyncio.create_task(self.reconcile(row['id']), name='hfp-reschedule-recovery')
+                        self._children.add(task)
+                        task.add_done_callback(self._children.discard)
             try:
                 callback = self._claim_due()
             except sqlite3.OperationalError:

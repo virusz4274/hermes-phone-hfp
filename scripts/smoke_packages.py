@@ -57,6 +57,9 @@ def main():
                     "-c",
                     """import importlib.util
 import hfp_mcp.hermes_bridge, hfp_mcp.phone_tasks, hfp_mcp.hermes_sessions
+from hfp_mcp.audio.opening import outgoing_opening
+assert outgoing_opening().text == 'Hello, this is Hermes, an AI assistant.'
+assert outgoing_opening().pcm
 from importlib.metadata import version
 assert version('hfp-mcp') == '0.1.1rc1'
 for module in ('dbus', 'gi', 'mcp'):

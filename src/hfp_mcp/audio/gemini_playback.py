@@ -191,6 +191,7 @@ class GeminiPlaybackMixin:
             if item.epoch != self._playback_epoch or self._stop_event.is_set():
                 return False
             await ws.send_str(json.dumps(payload, separators=(",", ":")))
+            self._on_playback_control_sent(item)
         return True
 
     async def _send_playback_bytes(self, ws: Any, epoch: int, pcm: bytes) -> bool:
@@ -203,6 +204,7 @@ class GeminiPlaybackMixin:
         return True
 
     async def _discard_playback(self, *, interrupted: bool) -> None:
+        self._on_playback_discarded(interrupted=interrupted)
         queued_frames = self._playback_buffered_frames
         if interrupted:
             self._playback_frames_interrupted += queued_frames

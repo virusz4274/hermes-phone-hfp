@@ -777,6 +777,49 @@ def test_installed_sdk_accepts_full_gemini_31_live_config(monkeypatch):
         assert declaration.behavior is None
 
 
+@pytest.mark.parametrize('model', ['gemini-3.1-flash-live-preview', 'gemini-3.8-live'])
+@pytest.mark.parametrize('tools', [
+    {'phone_status', 'end_call', 'phone_notes'},
+    {'ask_hermes', 'phone_status', 'end_call', 'phone_notes', 'phone_recall',
+     'phone_session', 'hermes_task', 'owner_call_lookup'},
+])
+async def test_live_sdk_wire_setup_accepts_every_phone_role(monkeypatch, model, tools):
+    """Validate the sent setup, including owner tools omitted by older SDK tests.
+
+    Pydantic accepts additionalProperties, but the Live service rejects the
+    serialized additional_properties field. The real SDK transport is exercised
+    with a fake WebSocket, so this regression has no cloud/audio side effects.
+    """
+    genai = pytest.importorskip('google.genai')
+    live = pytest.importorskip('google.genai.live')
+    monkeypatch.setenv('HFP_GEMINI_LIVE_MODEL', model)
+    monkeypatch.delenv('HFP_GEMINI_THINKING_LEVEL', raising=False)
+    captured = []
+    class Socket:
+        async def send(self, payload): captured.append(json.loads(payload))
+        async def recv(self, **kwargs): return b'{"setupComplete": {}}'
+    class Connection:
+        async def __aenter__(self): return Socket()
+        async def __aexit__(self, *args): pass
+    monkeypatch.setattr(live, 'ws_connect', lambda *args, **kwargs: Connection())
+    client = genai.Client(api_key='synthetic-test-key')
+    try:
+        async with client.aio.live.connect(model=model, config=gemini_live._live_config('', None, tools)):
+            pass
+    finally:
+        await client.aio.aclose()
+        client.close()
+    assert len(captured) == 1
+    setup = captured[0]['setup']
+    declarations = setup['tools'][0]['functionDeclarations']
+    assert {d['name'] for d in declarations} == tools
+    wire = json.dumps(setup)
+    assert 'additional_properties' not in wire and 'additionalProperties' not in wire
+    owner = next((d for d in declarations if d['name'] == 'owner_call_lookup'), None)
+    if owner:
+        assert owner['parameters']['properties']['limit']['maximum'] == 100
+
+
 @pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
 @pytest.mark.parametrize("thinking_level", [None, "", "minimal", "high"])
 def test_gemini_38_live_config_preserves_explicit_thinking(monkeypatch, model, thinking_level):

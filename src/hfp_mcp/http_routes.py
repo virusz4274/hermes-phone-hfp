@@ -107,6 +107,24 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         state['recent_callbacks'] = [r for r in scheduler.list() if r['status'] not in {'scheduled', 'firing'}][-10:] if scheduler else []
         return JSONResponse(state)
 
+    async def _owner_lookup(request):
+        from .owner_lookup import lookup
+        from .routing import RoutingConfig
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) - {'source_endpoint', 'binding_id', 'run_id', 'owner_chat', 'query'}:
+                raise ValueError('invalid owner lookup envelope')
+            result = await lookup(RoutingConfig.load(), runtime.ledger(), body.get('source_endpoint'),
+                {k: body[k] for k in ('binding_id', 'run_id', 'owner_chat') if k in body}, body.get('query', {}),
+                transcripts_enabled=bool(config and config.full_transcripts))
+            return JSONResponse(result)
+        except PermissionError:
+            return JSONResponse({'status': 'denied', 'message': 'Owner lookup denied'}, status_code=403)
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({'status': 'error', 'message': 'Invalid or unavailable owner lookup'}, status_code=400)
+        except (httpx.HTTPError, TimeoutError):
+            return JSONResponse({'status': 'unavailable', 'message': 'Owner lookup service unavailable'}, status_code=503)
+
     async def _phone_callbacks(request):
         scheduler = runtime.callbacks()
         if scheduler is None:
@@ -145,16 +163,43 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
             return JSONResponse({'error': 'phone callback scheduler unavailable'}, status_code=409)
         try:
             key = request.path_params['callback_id']
+            if request.method == 'GET':
+                return JSONResponse({'ok': True, 'callback': scheduler.get(key)})
             if request.path_params['action'] == 'cancel':
                 return JSONResponse({'ok': True, 'callback': scheduler.cancel(key)})
-            if request.path_params['action'] != 'reminder':
+            if request.path_params['action'] not in {'reminder', 'reminder-claim', 'reschedule', 'verify'}:
                 raise ValueError('unknown callback action')
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError('expected an object')
+            if request.path_params['action'] == 'reminder-claim':
+                return JSONResponse({'ok': True, 'acquired': scheduler.claim_reminder(key)})
+            if request.path_params['action'] == 'verify':
+                return JSONResponse({'ok': True, 'callback': scheduler.record_verification(
+                    key, body.get('expected_revision'), body.get('verification'))})
+            if request.path_params['action'] == 'reschedule':
+                from datetime import datetime
+                if not isinstance(body.get('run_at'), str):
+                    raise ValueError('run_at must be ISO-8601 text with timezone')
+                target = datetime.fromisoformat(body['run_at'].replace('Z', '+00:00'))
+                if target.tzinfo is None:
+                    raise ValueError('run_at must include a timezone')
+                row = scheduler.begin_reschedule(key, request_id=body.get('request_id'),
+                    expected_revision=body.get('expected_revision'), run_at=target.timestamp())
+                if row['schedule_change']['status'] not in {'applied', 'failed'}:
+                    row = await scheduler.reconcile(key)
+                change = row['schedule_change']
+                return JSONResponse({'ok': change['status'] == 'applied', 'callback': row, 'timezone': 'UTC',
+                    'requested_time': body['run_at'], 'requested_timezone': str(target.tzinfo),
+                    'verification': {'status': change['status'], 'requested_run_at': change['requested_run_at'],
+                        'callback_run_at': row['run_at'], 'reminder_run_at': change['reminder_run_at'],
+                        'reminder_missing': row['reminder_job_id'] is None}})
             scheduler.link_reminder(key, body.get('job_id'))
             return JSONResponse({'ok': True})
         except (TypeError, ValueError) as exc:
+            from .callbacks import CallbackConflict
+            if isinstance(exc, CallbackConflict):
+                return JSONResponse({'error': str(exc)}, status_code=409)
             return JSONResponse({'error': str(exc)}, status_code=400)
 
     async def _transcripts(request):
@@ -322,6 +367,7 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
 
     routes = [
         Route("/v1/phone/caller-notes/{action}", _caller_notes, methods=["POST"]),
+        Route('/v1/phone/owner-lookup', _owner_lookup, methods=['POST']),
         Route("/v1/phone/recall", _phone_recall, methods=["POST"]),
         Route("/v1/phone", _phone_status, methods=["GET"]),
         Route("/v1/phone/transcripts", _transcripts, methods=["GET"]),
@@ -329,6 +375,7 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         Route("/v1/phone/calls", _phone_start, methods=["POST"]),
         Route("/v1/phone/callbacks", _phone_callbacks, methods=["GET", "POST"]),
         Route('/v1/phone/callbacks/{callback_id}/{action}', _callback_control, methods=['POST']),
+        Route('/v1/phone/callbacks/{callback_id}', _callback_control, methods=['GET']),
         Route("/v1/phone/approval", _phone_approval, methods=["POST"]),
         Route("/v1/state", _state_endpoint, methods=["GET"]),
         Route("/status", _legacy_status_endpoint, methods=["GET"]),

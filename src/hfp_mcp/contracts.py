@@ -318,6 +318,7 @@ class RequestLedger:
     def prune(self) -> int:
         cutoff = time.time() - (self.retention_days * 86400)
         with self._lock:
+            self._db.execute('DELETE FROM phone_call_sources WHERE created_at<?', (cutoff,))
             counts = 0
             for table, column in (
                 ("idempotency", "created_at"),

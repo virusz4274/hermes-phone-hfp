@@ -1368,6 +1368,8 @@ async def _run_handshake_and_session(context: RFCOMMConnectionContext) -> None:
                                 "timing_from_audio_acquisition_ms", "startup_preparation_ms", "startup_audio_activity", "tool_bridge", "reconnect_count",
                                 "input_queue_overflow_frames", "dropped_playback_frames",
                                 "playback_queue_peak_ms", "transcript_storage_error",
+                                "outgoing_opening",
+                                "startup_input_buffer",
                             )
                         })
                     caller_message = _gemini_live_manager.consume_summary_candidate(call_id)
@@ -3518,6 +3520,8 @@ def _create_phone_controller(routing):
                 release=release_audio_stream, clear=clear_audio_playback)
         _gemini_allowed_tools = frozenset({"ask_hermes", "end_call", "phone_status"})
         policy = controller.config.policies[controller.route.policy]
+        if policy.admin:
+            _gemini_allowed_tools |= {"owner_call_lookup"}
         if policy.notes_only:
             _gemini_allowed_tools = frozenset({"phone_notes", "end_call", "phone_status"})
         elif policy.allows("hfp_caller_read"):
@@ -3547,6 +3551,10 @@ def _create_phone_controller(routing):
             context_provider=(controller.conversation.context if controller.conversation else
                               notes_context if "phone_notes" in _gemini_allowed_tools else None),
             context_ready=controller.conversation.voice_ready if controller.conversation else None)
+        if controller.snapshot().get('call', {}).get('direction') == 'outgoing':
+            from .audio.opening import outgoing_opening
+            _gemini_live_manager.outgoing_opening = outgoing_opening(
+                os.getenv('HFP_GEMINI_OUTGOING_GREETING', 'spoken'))
         return GeminiVoice(_gemini_live_manager)
 
     def timing(call_id, stage, detail):
@@ -3605,6 +3613,22 @@ async def start_phone_call(number: str, request_id: str, purpose: str = "") -> d
         return await _run_idempotent_async(request_id, f"start_phone_call:{normalized}:{digest}", start)
     except Exception as exc:
         return _contract_failure(exc)
+
+
+def _reminder_reconciler(routing):
+    async def reconcile(row):
+        from .hermes_api import HermesAPI
+        route, _ = routing.resolve_outbound(row['number'])
+        if not route:
+            raise ValueError('Callback route unavailable')
+        api = HermesAPI(routing.endpoints[route.endpoint])
+        try:
+            return await api.request('POST', 'v1/hfp/reminders/reschedule', bridge=True,
+                json={'callback_id': row['id'], 'request_id': row['schedule_change']['request_id']},
+                timeout=15)
+        finally:
+            await api.close()
+    return reconcile
 
 
 def create_http_app(
@@ -3667,6 +3691,7 @@ def create_http_app(
                 config.database_file,
                 start_phone_call,
                 region=routing.region,
+                reconcile_reminder=_reminder_reconciler(routing),
             )
             await _callback_scheduler.start()
         try:

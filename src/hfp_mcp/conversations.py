@@ -8,6 +8,10 @@ import uuid
 
 def prepare_schema(db):
     db.executescript("""
+        CREATE TABLE IF NOT EXISTS phone_call_sources (
+            call_id TEXT PRIMARY KEY, profile TEXT NOT NULL, caller_id TEXT NOT NULL,
+            endpoint TEXT NOT NULL, number TEXT, persistent INTEGER NOT NULL,
+            created_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS phone_conversations (
             id TEXT PRIMARY KEY, profile TEXT NOT NULL, caller_id TEXT NOT NULL,
             persistent INTEGER NOT NULL, hermes_session TEXT,
@@ -62,6 +66,8 @@ class ConversationStore:
 
     def delete(self, conversation):
         with self.lock, self.db:
+            self.db.execute('DELETE FROM phone_call_sources WHERE profile=? AND caller_id=?',
+                            (conversation['profile'], conversation['caller_id']))
             ids = [r[0] for r in self.db.execute("SELECT id FROM phone_conversations WHERE profile=? AND caller_id=?",
                                                 (conversation["profile"], conversation["caller_id"]))]
             for cid in ids:

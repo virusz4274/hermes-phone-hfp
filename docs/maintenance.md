@@ -36,6 +36,17 @@ stale revisions cause a conflict and omitted revisions fail validation. Existing
 notes and transcripts are preserved by the automatic database additions. This
 preview does not promise patch-level API compatibility.
 
+The Gemini demo updates add callback revisions, durable schedule operations,
+reminder-creation claims and trusted call-source attribution through additive
+SQLite migrations. Upgrade daemon and participating Hermes environments from the
+same tested distribution, then restart both services after calls and continued
+tasks settle. For an existing configured installation, installing the same wheel
+with `pip install --no-deps --force-reinstall <wheel>` in both environments avoids
+changing Bluetooth configuration or dependency versions. Confirm module hashes,
+new authenticated capabilities and migrated columns after restart; a matching
+package version alone is insufficient. No guest route or owner-access grant is
+created automatically.
+
 ## Backups
 
 The Hermes installer automatically backs up replaced plugin files and `config.yaml` under `<Hermes home>/hfp-phone-backups/<timestamp>/`. That directory is outside plugin discovery. The Bluetooth installer separately backs up its host configuration and daemon environment under `/var/lib/hfp-mcp/backups/`.
@@ -50,6 +61,7 @@ Before removing data, retain the files you need:
 - The adjacent key file with `callers.sqlite3`, so restored caller IDs still match their notes.
 - The selected Hermes home's `state.db` for native task sessions linked from the
   daemon's `calls.db`. Preserve these databases together when backing up continuity.
+- Its `cron/jobs.json` and other cron state for linked Telegram reminder IDs.
 
 Copy databases after calls and the services using them have stopped. A plugin/config backup is not a full Hermes backup; preserve other Hermes data through your normal backup process.
 
@@ -125,3 +137,10 @@ and modification time. Backups can contain credentials; keep them private.
 A snapshot restores configuration, not OS/Python packages, pairing/trust records,
 group membership, user lingering, or service enablement. Those changes may remain
 after a failed install. Shared dependencies must not be removed automatically.
+
+Gemini outgoing openings now default to the packaged cached spoken greeting.
+Keep `hfp_mcp/audio/assets/outgoing-hello.wav` with the package during upgrades;
+release and portable-install checks verify it is present and readable. Set
+`HFP_GEMINI_OUTGOING_GREETING=off` to retain recipient-first outgoing behavior or
+`chime` for a brief cue. Restart after configuration/package changes when calls
+and background tasks have settled. Incoming calls continue to wait for the caller.

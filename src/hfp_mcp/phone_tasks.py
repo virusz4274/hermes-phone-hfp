@@ -104,6 +104,18 @@ class TaskRegistry:
         return {k: row[k] for k in ('task_id', 'request_id', 'label', 'session_id', 'run_id', 'status', 'message',
                 'continue_after_call', 'expires_at', 'delivery', 'approval', 'pending_steer') if k in row}
 
+    def schedule_receipt(self, run_id, receipt):
+        """Retain observed tool outcomes for this attempt, without replaying work."""
+        with self.store._lock:
+            row = next((r for r in self.rows() if r.get('run_id') == run_id), None)
+            if not row or row['status'] in TERMINAL or row['status'] == 'stopping':
+                return
+            receipts = row.get('schedule_receipts', [])
+            identity = receipt.get('callback_id') or receipt.get('reminder_job_id')
+            receipts = [r for r in receipts if not (r['run_id'] == run_id and identity
+                        and identity == (r.get('callback_id') or r.get('reminder_job_id')))]
+            self.update(row['task_id'], schedule_receipts=[*receipts, {**receipt, 'run_id': run_id}][-8:])
+
     def authority(self, run_id):
         with self.store._lock:
             result = self.store.db.execute("SELECT data FROM phone_tasks WHERE json_extract(data, '$.run_id')=?", (run_id,)).fetchone()
@@ -400,6 +412,14 @@ class GatewayTasks:
                         pass  # Expired/revoked authority never starts a follow-up.
                 fields.update(message=str(state.get('output') or state.get('error') or current.get('stop_reason') or state['status'])[:12000],
                     pending_steer=pending, completed_at=time.time())
+                receipts = [r for r in current.get('schedule_receipts', []) if r['run_id'] == row['run_id']]
+                if receipts:
+                    # Lead with observed state so notification truncation cannot
+                    # hide an unverified correction behind fluent model output.
+                    verified = all(r.get('verified') is True for r in receipts)
+                    heading = 'Verified schedule outcome' if verified else 'Schedule change was not fully verified; inspect effective times before retrying'
+                    fields['message'] = heading + ': ' + json.dumps(receipts) + '\n' + fields['message']
+                    if not verified and state['status'] == 'completed': fields['status'] = 'failed'
                 if pending:
                     fields.update(status='failed' if state['status'] == 'completed' else state['status'],
                         message='The requested correction was not applied. No automatic follow-up was started '

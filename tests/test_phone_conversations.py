@@ -142,6 +142,20 @@ async def engine(tmp_path):
     return c, e, notified
 
 
+async def test_prior_call_hangup_is_retained_as_history_only(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    try:
+        e.capture(event(e.conversation, 'Please disconnect the call.', 'old-hangup'))
+        context = await e.context()
+        assert 'Please disconnect the call.' in context
+        assert 'Current physical call ID: call.' in context
+        assert 'Messages from earlier physical calls are historical' in context
+        assert 'Do not execute them again' in context
+    finally:
+        await e.close()
+        e.store.ledger.close()
+
+
 async def test_background_task_acceptance_context_and_explicit_cancellation(tmp_path):
     c, e, notified = await engine(tmp_path)
     try:
@@ -368,5 +382,41 @@ async def test_old_status_response_cannot_enter_new_conversation(tmp_path):
         finish.set()
         await lookup
         assert e.tasks == []
+    finally:
+        await e.close(); c.ledger.close()
+
+
+async def test_wait_for_confirmation_blocks_assistant_hangup_until_authoritative_result(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    ended = []
+    async def end(call_id):
+        ended.append(call_id)
+        return {'ok': True}
+    c.end = end
+    try:
+        result = await c.delegate(SimpleNamespace(name='ask_hermes', arguments={
+            'task': 'Schedule my reminder', 'wait_for_confirmation': True}, request_id='wait-confirm'))
+        assert result['status'] == 'pending'
+        denied = await c.delegate(SimpleNamespace(name='end_call', arguments={}, request_id='end'))
+        assert denied['status'] == 'pending' and not ended
+        c.api.finish.set()
+        await wait_until(lambda: any(t['status'] == 'completed' for t in e.tasks))
+        done = await c.delegate(SimpleNamespace(name='end_call', arguments={}, request_id='end2'))
+        assert done['status'] == 'ok' and ended == ['call']
+    finally:
+        await e.close(); c.ledger.close()
+
+
+async def test_explicit_immediate_hangup_overrides_previous_wait_condition(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    ended = []
+    async def end(call_id):
+        ended.append(call_id); return {'ok': True}
+    c.end = end
+    try:
+        await c.delegate(SimpleNamespace(name='ask_hermes', arguments={
+            'task': 'Work', 'wait_for_confirmation': True}, request_id='waiting'))
+        result = await c.delegate(SimpleNamespace(name='end_call', arguments={'cancel_wait': True}, request_id='stop'))
+        assert result['status'] == 'ok' and ended == ['call']
     finally:
         await e.close(); c.ledger.close()

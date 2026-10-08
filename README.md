@@ -14,6 +14,8 @@ Turn your Hermes Agent into a virtual phone call assistant and office secretary 
 
 Use [Configuration and operations](docs/phone-routing.md) for caller profiles, voice and approvals, and [Maintenance](docs/maintenance.md) for updates, backups and manual removal.
 
+For rehearsal and video demonstrations, use the [manual feature checklist](docs/manual-feature-checklist.md) or its [browser version](docs/manual-feature-checklist.html) to record results and follow the suggested demo sequence.
+
 ## What gets installed
 
 There are two running components and one plugin source folder:
@@ -52,6 +54,8 @@ Available in your Hermes owner chat channels (e.g. Telegram, Discord, CLI) to co
 - `hfp_phone_start_call`: Initiate an outbound phone call through the paired handset to a specified number.
 - `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first and supply the returned revision as `expected_revision` when replacing them. For remembered facts and call summaries, use notes first; consult transcripts when notes are insufficient or exact dialogue is requested.
 - `hfp_phone_status`: Inspect live Bluetooth connection, active call state, and routing status.
+- `hfp_phone_schedule_call` / `hfp_phone_reschedule_callback`: Create a callback with a linked Telegram reminder, or move both schedules using the exact callback ID, revision and stable change request ID. Receipts report requested and effective times after read-back.
+- `hfp_phone_owner_lookup`: Read permitted notes, call metadata or retained transcript excerpts with filters and continuation cursors. Admin callers can also use Gemini's `owner_call_lookup`.
 - `hfp_phone_transcripts`: List past phone calls or read detailed transcripts when full transcript retention is enabled.
 - `hfp_phone_approval`: Explicitly approve (`once`) or deny (`deny`) pending tool execution requests prompted by in-call tasks.
 

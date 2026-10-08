@@ -167,9 +167,28 @@ async def exercise():
         assert db.get_session(root) is None and db.get_session(child) is None
     if hasattr(bridge, "tasks"):
         bridge.tasks.capacity.db.close()
+    # Real native reminder-store/firing-lock integration, with no scheduler or delivery.
+    import time
+    from tools.cronjob_tools import cronjob
+    from hfp_mcp.reminders import read_reminder, move_reminder
+    original_due = time.time() + 600
+    from datetime import datetime, timezone
+    due_text = datetime.fromtimestamp(original_due, timezone.utc).isoformat()
+    job = json.loads(cronjob(action='create', name='Synthetic callback verification',
+        schedule=due_text, prompt='Synthetic reminder\nScheduled time: ' + due_text, deliver='telegram'))
+    assert job.get('success'), job
+    job_id = job['job_id']
+    observed = read_reminder(job_id, original_due)
+    assert observed['matches'], observed
+    changed_due = original_due + 600
+    moved = move_reminder(job_id, changed_due)
+    assert moved['verified'] and moved['matches'], moved
+    assert move_reminder(job_id, changed_due)['matches']
+    assert json.loads(cronjob(action='pause', job_id=job_id))['success']
+    assert not move_reminder(job_id, changed_due + 600)['verified']
     store.close()
     print(
-        "PASS: native plugin registration, capability/auth gates, sessions, caller revocation, compaction lineage and deletion"
+        "PASS: native plugin registration, capability/auth gates, sessions, caller revocation, compaction lineage, deletion and reminder rescheduling/read-back"
     )
 
 

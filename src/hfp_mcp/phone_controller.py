@@ -269,6 +269,12 @@ class PhoneController:
                 **({"memory_closeout": True} if (capabilities or {}).get("call_memory_closeout") else {}),
             )
             stage("caller_bound")
+            if self.ledger is not None:
+                # Preserve trusted call/profile provenance even without continuity.
+                with self.ledger._lock, self.ledger._db:
+                    self.ledger._db.execute('INSERT OR IGNORE INTO phone_call_sources VALUES (?,?,?,?,?,?,?)',
+                        (call_id, endpoint.profile, self.binding['caller_id'], route.endpoint, number,
+                         int(self.binding.get('persistent', False)), time.time()))
             self._binding_deadlines[self.binding["session_id"]] = binding_started + CALLER_BINDING_TTL_SECONDS
             if self.call_id != call_id:
                 return
@@ -546,6 +552,8 @@ class PhoneController:
         return (
             ("This is an outgoing call. Wait for the recipient to speak first, then "
              "introduce yourself as Hermes, an assistant, using the owner's name only if supplied. "
+             "If this call has a cached spoken opening, it handles that introduction; "
+             "after the recipient replies, continue with the purpose without repeating it. "
              "Naturally pursue all objectives in the owner call brief; do not read it verbatim. "
              "A reminder call to the owner should convey the supplied meeting/reminder details. "
              "Do not invent familiarity or facts about a new contact. " if outgoing else "")
@@ -561,6 +569,7 @@ class PhoneController:
             + "Selected Hermes profile: "
             + self.config.endpoints[self.route.endpoint].profile
             + ". Hermes connection and caller binding were checked for this call. "
+            + "Current physical call ID: " + str(self.call_id) + ". "
             + access
             + 'Current local time: ' + datetime.now(ZoneInfo(timezone_name(self.config.timezone))).isoformat() + '. '
             + ("For reminders, callbacks, appointment scheduling, or work to finish after hangup, "
@@ -581,6 +590,25 @@ class PhoneController:
         current_id, phase, _ = self.identity(self.snapshot())
         if not self.binding or not self.api or current_id != self.call_id or phase != "active":
             return {"status": "error", "message": "This phone session has ended."}
+        if request.name == 'owner_call_lookup':
+            if not self.config.policies[self.route.policy].admin:
+                return {'status': 'denied', 'message': 'Owner lookup requires admin access'}
+            from .owner_lookup import lookup
+            binding, call_id, endpoint = self.binding, self.call_id, self.route.endpoint
+            generation = self.conversation.generation if self.conversation else None
+            try:
+                result = await lookup(self.config, self.ledger, endpoint, {'binding_id': binding['session_id']},
+                    request.arguments, transcripts_enabled=self.full_transcripts)
+                if (self.binding is not binding or self.call_id != call_id or self.identity(self.snapshot())[:2] != (call_id, 'active')
+                        or (self.conversation.generation if self.conversation else None) != generation):
+                    return {'status': 'denied', 'message': 'This owner call has ended'}
+                return result
+            except PermissionError:
+                return {'status': 'denied', 'message': 'Owner lookup denied'}
+            except (httpx.HTTPError, TimeoutError):
+                return {'status': 'unavailable', 'message': 'Owner lookup service unavailable'}
+            except (TypeError, ValueError):
+                return {'status': 'error', 'message': 'Invalid owner lookup arguments'}
         if request.name == "phone_notes":
             args = request.arguments
             if args.get("action") not in {"read", "update"} or set(args) - {"action", "notes", "expected_revision"}:
@@ -629,6 +657,12 @@ class PhoneController:
                     "approval_pending": bool(self.status.get("approval")),
                     **(await self.conversation.task_control({"action": "status"}) if self.conversation else {})}
         if request.name == "end_call":
+            manager = getattr(self.voice, "manager", None)
+            ready = getattr(manager, "assistant_hangup_ready", None)
+            if ready is not None and not ready():
+                return {'status': 'denied', 'message': 'No caller speech has arrived in this physical call. Keep the call open and wait for the caller; past-call hangup requests do not apply.'}
+            if self.conversation and not request.arguments.get('cancel_wait', False) and not await self.conversation.hangup_ready():
+                return {'status': 'pending', 'message': 'The caller asked to wait for task confirmation. Keep the call open and report the pending state.'}
             if self._ending_call_id != self.call_id:
                 outcome = await self.end(self.call_id)
                 if isinstance(outcome, dict) and outcome.get("ok") is False:

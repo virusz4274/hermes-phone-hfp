@@ -68,6 +68,7 @@ class RoutingConfig:
     background_task_minutes: int = 30
     outbound: Route | None = None
     timezone: str = ""
+    owner_access: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RoutingConfig":
@@ -195,6 +196,15 @@ class RoutingConfig:
         outbound = Route(outbound_endpoint, OUTBOUND_NOTES_POLICY) if outbound_endpoint else None
         from .call_memory import timezone_name
         timezone = timezone_name(str(data.get("timezone", "")))
+        owner_access = data.get("owner_access", {})
+        if not isinstance(owner_access, dict):
+            raise ValueError("phone.owner_access must be a mapping of endpoint names to lists")
+        for source, targets in owner_access.items():
+            if source not in endpoints or not isinstance(targets, list) or any(
+                not isinstance(target, str) or target not in endpoints for target in targets
+            ):
+                raise ValueError("phone.owner_access references an undefined endpoint")
+        owner_access = {source: tuple(dict.fromkeys(targets)) for source, targets in owner_access.items()}
         return cls(
             True,
             region,
@@ -205,7 +215,7 @@ class RoutingConfig:
             blocked,
             boolean(data.get("auto_answer"), True),
             boolean(data.get("auto_reconnect"), False),
-            max_tasks, background_minutes, outbound, timezone,
+            max_tasks, background_minutes, outbound, timezone, owner_access,
         )
 
     def resolve_outbound(self, number: str) -> tuple[Route | None, str]:
