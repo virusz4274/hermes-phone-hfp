@@ -2,7 +2,17 @@
 
 ## Unreleased
 
+- Native Hermes scheduling and bounded outcome-driven phone follow-up replace the daemon callback timer and companion call-instruction reminder.
+- Durable profile-scoped requests, attempt evidence, restricted Hermes decisions, cancellation and restart safeguards distinguish connection from objective completion.
+- Reconcile planning, capability claims, data retention and coordinated upgrade
+  documentation with native scheduling. Full workflow live acceptance remains
+  pending; dated evidence is linked from [release validation](docs/release.md).
+
 ## 0.1.1rc1 — public preview
+
+The entries below describe the earlier preview preparation. The Unreleased
+native-workflow changes supersede its daemon timer and companion-reminder design;
+see [current lifecycle](docs/hermes-call-workflows.md).
 
 - Carry the owner's purpose and relevant context into outgoing calls. Allow calls
   to unconfigured numbers with restricted conversation and per-number memory,

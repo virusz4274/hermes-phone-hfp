@@ -6,9 +6,9 @@
 Turn your Hermes Agent into a virtual phone call assistant and office secretary using your paired mobile phone over Bluetooth HFP. Powered by Gemini Live for low-latency, bidirectional conversational voice (with classic STT/TTS fallback), Hermes Phone lets you and your callers interact with Hermes naturally over standard cellular phone calls.
 
 ### What you can do
-- **Personal Virtual Assistant (Owner Route):** Call Hermes from your mobile phone while on the move to check calendars, book meetings, manage tasks, and run agent tools with approval safeguards.
-- **Virtual Receptionist (Guest & Known Routes):** Let Hermes answer incoming calls from clients, guests, or colleagues. It can answer questions, take messages, and book appointments—with strict caller memory isolation and tool restrictions.
-- **Conversational Voice & Continuity:** Low-latency voice powered by Gemini Live. Hermes remembers caller dialogue across calls and can continue working in the background after hangup, sending follow-ups via Telegram.
+- **Personal assistant:** Call Hermes to manage tasks and use your configured tools with normal approval safeguards. Calendar lookup and booking require an installed, authorized Hermes integration.
+- **Receptionist routes:** Admit known or guest callers with isolated memory and explicitly permitted tools. Message delivery and appointment booking require caller-aware integrations; a built-in message-taking tool and owner inbox remain planned.
+- **Voice and continuity:** Gemini Live supports conversation and interruption. Caller notes follow the route memory policy; retained dialogue requires continuity or transcript configuration. Authorized background work can continue after hangup and report through configured Telegram delivery.
 
 **Start with [Installation](docs/install.md).** It covers Bluetooth pairing, the Hermes plugin, credentials, your first caller route and startup checks.
 
@@ -23,7 +23,7 @@ There are two running components and one plugin source folder:
 | Component | Location in this repository | Responsibility |
 | --- | --- | --- |
 | HFP daemon | `src/hfp_mcp/` | Owns Bluetooth, call routing, audio and the Gemini Live/classic voice backends |
-| Hermes phone plugin | `hermes_phone_plugin/` | Adds caller context, permission checks and phone controls to your existing Hermes gateway |
+| Hermes phone plugin | `hermes_phone_plugin/` | Integrates phone execution, evidence and caller permissions with native Hermes scheduling, decisions and delivery |
 | Installers and examples | `setup/` | Installs the daemon and plugin into their respective Python environments |
 
 `hermes_phone_plugin/` is the **only Hermes plugin to install**. The installer copies it to `<Hermes home>/plugins/hfp-phone/`; its implementation is in the installed `hfp_mcp.hermes_bridge` module. No separate Hermes phone platform or awareness plugin is needed.
@@ -32,7 +32,8 @@ There are two running components and one plugin source folder:
 flowchart LR
     phone[Paired mobile phone] <--> daemon[HFP daemon: routing and voice]
     daemon <--> gateway[Existing Hermes gateway: selected profile]
-    gateway --- plugin[Phone plugin: caller context and permissions]
+    gateway --- plugin[Phone plugin: authorized call execution and evidence]
+    gateway --- native[Native Hermes: schedules, follow-up decisions and delivery]
 ```
 
 ## Calls and profiles
@@ -51,10 +52,11 @@ Hermes Phone cleanly separates concerns across four layers:
 
 ### 1. Owner Phone Controls (`hfp_phone` toolset)
 Available in your Hermes owner chat channels (e.g. Telegram, Discord, CLI) to control telephone operations:
-- `hfp_phone_start_call`: Initiate an outbound phone call through the paired handset to a specified number.
+- `hfp_phone_start_call`: With a purpose, create an immediate native Hermes phone workflow. Acceptance confirms scheduling, not completed conversation. Purpose-free use remains raw manual call control.
 - `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first and supply the returned revision as `expected_revision` when replacing them. For remembered facts and call summaries, use notes first; consult transcripts when notes are insufficient or exact dialogue is requested.
-- `hfp_phone_status`: Inspect live Bluetooth connection, active call state, and routing status.
-- `hfp_phone_schedule_call` / `hfp_phone_reschedule_callback`: Create a callback with a linked Telegram reminder, or move both schedules using the exact callback ID, revision and stable change request ID. Receipts report requested and effective times after read-back.
+- `hfp_phone_status`: Inspect live call/routing state and profile-scoped requests, attempts, schedules, and decisions.
+- `hfp_phone_schedule_call` / `hfp_phone_reschedule_callback`: Create or move a native Hermes call job using the callback ID, revision and stable change request ID. Hermes evaluates the call outcome and owns bounded follow-up; Telegram reports its decision. See [the workflow guide](docs/hermes-call-workflows.md).
+- `hfp_phone_cancel_callback`: Cancel future attempts of a request; ending an already admitted call requires a separate hangup.
 - `hfp_phone_owner_lookup`: Read permitted notes, call metadata or retained transcript excerpts with filters and continuation cursors. Admin callers can also use Gemini's `owner_call_lookup`.
 - `hfp_phone_transcripts`: List past phone calls or read detailed transcripts when full transcript retention is enabled.
 - `hfp_phone_approval`: Explicitly approve (`once`) or deny (`deny`) pending tool execution requests prompted by in-call tasks.
@@ -90,8 +92,9 @@ Calendar, booking, and custom business workflows are supplied by standard Hermes
 
 ## Development
 
-See [TODO](TODO.md) for pending caller-memory recall, number-binding checks, and
-history work, including which parts already exist.
+See [TODO](TODO.md) and the [implementation backlog](docs/implementation-backlog.yaml)
+for implemented groundwork, remaining reliability/office features, and separate
+automated, deployment, and live acceptance evidence.
 
 See [Contributing](CONTRIBUTING.md) for environment creation without changing
 Bluetooth services. Once the environment exists:

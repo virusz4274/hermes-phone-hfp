@@ -30,6 +30,26 @@ class HttpRuntime:
 
 
 def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
+    workflow_executor = None
+
+    def executions():
+        nonlocal workflow_executor
+        if workflow_executor is None:
+            from .workflow_execution import WorkflowExecution
+            workflow_executor = WorkflowExecution(runtime, config)
+        return workflow_executor
+
+    async def _workflow_start(request):
+        try:
+            return JSONResponse(await executions().start(await request.json()))
+        except PermissionError:
+            return JSONResponse({'ok': False, 'error': 'Phone workflow authority denied'}, status_code=403)
+        except (ValueError, KeyError, TypeError, httpx.HTTPError):
+            return JSONResponse({'ok': False, 'error': 'Phone workflow execution unavailable'}, status_code=409)
+
+    async def _workflow_outcome(request):
+        return JSONResponse(executions().outcome(request.path_params['attempt_id']))
+
     async def _state_endpoint(_request):
         runtime.sync_state()
         return JSONResponse(runtime.state.versioned_snapshot())
@@ -130,7 +150,9 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         if scheduler is None:
             return JSONResponse({"error": "phone callback scheduler unavailable"}, status_code=409)
         if request.method == "GET":
-            return JSONResponse({"callbacks": scheduler.list()})
+            return JSONResponse({"callbacks": scheduler.list(), 'scheduler': 'hermes', 'legacy_history': True})
+        if getattr(scheduler, 'retired', False):
+            return JSONResponse({'ok': False, 'error': 'Daemon scheduling is retired; use Hermes hfp_phone_schedule_call'}, status_code=409)
         try:
             body = await request.json()
             if not isinstance(body, dict):
@@ -373,6 +395,8 @@ def control_routes(config: RuntimeConfig, runtime: HttpRuntime):
         Route("/v1/phone/transcripts", _transcripts, methods=["GET"]),
         Route("/v1/phone/transcripts/calls", _transcript_calls, methods=["GET"]),
         Route("/v1/phone/calls", _phone_start, methods=["POST"]),
+        Route('/v1/phone/workflow-call', _workflow_start, methods=['POST']),
+        Route('/v1/phone/workflow-outcome/{attempt_id}', _workflow_outcome, methods=['GET']),
         Route("/v1/phone/callbacks", _phone_callbacks, methods=["GET", "POST"]),
         Route('/v1/phone/callbacks/{callback_id}/{action}', _callback_control, methods=['POST']),
         Route('/v1/phone/callbacks/{callback_id}', _callback_control, methods=['GET']),

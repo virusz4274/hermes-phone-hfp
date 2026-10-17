@@ -51,6 +51,9 @@ def check(path):
         names = {n for n, _ in files}
         required = {
             "hfp_mcp/hermes_bridge.py",
+            "hfp_mcp/phone_workflows.py",
+            "hfp_mcp/phone_workflow_runner.py",
+            "hfp_mcp/workflow_execution.py",
             "hfp_mcp/hermes_sessions.py",
             "hfp_mcp/phone_tasks.py",
             "hfp_mcp/http_routes.py",

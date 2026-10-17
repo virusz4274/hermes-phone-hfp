@@ -13,7 +13,7 @@ The Hermes installer automates the routing file path and starter YAML. Neither i
 
 ## Updating an installation
 
-1. Finish active calls and check `hfp-mcp phone status` for unfinished continued tasks. Settle or cancel those tasks before an update; restart reconciles their native IDs without replaying actions. Choose the checkout revision you intend to install. Save any local configuration changes.
+1. Finish active calls and inspect `hfp-mcp phone status` for continued tasks and native phone workflows. Settle or cancel affected work and wait for native call/decision/report workers to finish before stopping services. Cancellation prevents future attempts; hangup is separate. Choose the intended revision and save local configuration changes.
 2. Stop the affected Hermes gateway while replacing its plugin. For an installed default gateway service, use `systemctl --user stop hermes-gateway.service`; use the corresponding unit for a named profile or stop a foreground gateway in its terminal.
 3. Run the Bluetooth installer, retaining `--with-gemini` if you use Gemini. Run the Hermes installer for each participating profile with its existing home and interpreter.
 4. Validate the routing YAML with `.venv/bin/hfp-mcp route validate` and check each role with `route explain <number>`.
@@ -61,7 +61,8 @@ Before removing data, retain the files you need:
 - The adjacent key file with `callers.sqlite3`, so restored caller IDs still match their notes.
 - The selected Hermes home's `state.db` for native task sessions linked from the
   daemon's `calls.db`. Preserve these databases together when backing up continuity.
-- Its `cron/jobs.json` and other cron state for linked Telegram reminder IDs.
+- Its `cron/jobs.json` and all linked native cron execution/claim state for phone jobs, report-only jobs, and ordinary text reminders.
+- Each participating profile's `hfp-phone/workflows.sqlite3`, alongside its caller store/key, and generated phone executor/report scripts in its `scripts/` directory. Keep the daemon `calls.db` (including execution receipts), native `state.db`, cron state, and profile stores from one quiescent snapshot.
 
 Copy databases after calls and the services using them have stopped. A plugin/config backup is not a full Hermes backup; preserve other Hermes data through your normal backup process.
 
@@ -96,7 +97,7 @@ an HTTP health response alone does not prove the handset is connected.
 
 This procedure removes an installed phone integration. It does not delete the new source checkout or unrelated Hermes profiles.
 
-1. Finish calls, stop affected Hermes gateways and disable the phone daemon:
+1. Cancel future phone workflow attempts while the plugin is available, settle active call/decision/report workers, then stop affected Hermes gateways and disable the phone daemon:
 
    ```bash
    systemctl --user disable --now hfp-mcp.service
@@ -104,7 +105,7 @@ This procedure removes an installed phone integration. It does not delete the ne
 
 2. Back up the HFP files listed above. Remove the installed `~/.config/systemd/user/hfp-mcp.service` and any HFP-specific drop-ins. If an older setup added `hermes-gateway.service.d/20-hfp-phone.conf`, remove that file so Hermes no longer starts the old daemon or loads its environment.
 3. In each participating Hermes profile, remove `hfp-phone` and obsolete `hfp-call-awareness` plugin entries, HFP MCP registrations, and `hfp_phone`/`hfp_caller` references from `platform_toolsets` and `known_plugin_toolsets`. Remove only phone-related entries. Remove HFP-specific environment variables and stale phone-operation skills. Remove the installed phone-plugin directories from `plugins/`, including obsolete disabled or backup copies that remain discoverable. If no other profile using that interpreter needs the phone plugin, uninstall the supporting package with `<hermes-python> -m pip uninstall hfp-mcp`; keep shared dependencies.
-4. Archive or remove the daemon environment, phone YAML, daemon state directory and the profile's caller-note directory. Preserve any unrelated sections in a shared YAML file. Historical Hermes chats and external calendar records are separate data and are not removed by uninstalling this integration.
+4. Archive or remove the daemon environment, phone YAML/state and the profile's `hfp-phone/` stores according to your retention needs. Remove only identified phone-workflow native cron jobs and generated executor/report scripts after their workers have settled; leave unrelated jobs/scripts alone. Preserve unrelated sections in shared YAML. Historical Hermes chats, native delivery history and external calendar records require separate management in their owning systems.
 5. Remove only HFP-specific host overrides if present: `/etc/dbus-1/system.d/hfp-mcp.conf`, WirePlumber's `90-hfp-mcp.conf` or `90-hfp-mcp.lua`, and the obsolete `99-hfp-audio.conf`. Check both `/etc/wireplumber/` and your user WirePlumber configuration directories. Leave shared Bluetooth packages, pairing records and unrelated audio settings intact.
 6. Reload the systemd user configuration with `systemctl --user daemon-reload`. If the D-Bus policy changed, run `sudo systemctl reload dbus.service`. If WirePlumber overrides changed, restart the active WirePlumber user service. Start the affected Hermes gateways again.
 7. Verify that `systemctl --user show hfp-mcp.service -p LoadState -p ActiveState` reports `not-found` and `inactive`, the Hermes gateways are healthy, and no HFP plugin/toolset registrations remain in their configuration.
@@ -144,3 +145,23 @@ release and portable-install checks verify it is present and readable. Set
 `HFP_GEMINI_OUTGOING_GREETING=off` to retain recipient-first outgoing behavior or
 `chime` for a brief cue. Restart after configuration/package changes when calls
 and background tasks have settled. Incoming calls continue to wait for the caller.
+
+## Native phone workflow upgrade
+
+Phone scheduling now belongs to native Hermes cron. See [the lifecycle and upgrade guide](hermes-call-workflows.md) before restarting: preserve linked workflow, call, native session, cron and script stores together. Legacy pending daemon callbacks are held for review, and terminal history is retained.
+
+For rollback, stop both runtimes and native phone workers, then restore compatible
+packages and the complete linked snapshot: daemon ledger/execution receipts,
+profile caller key/store and workflow database, native sessions/cron state,
+generated scripts, configuration, and plugin. Do not combine an older workflow
+store with newer execution claims or resume historical uncertain calls. If external
+actions occurred after the snapshot, reconcile them before re-enabling jobs; a
+filesystem restore cannot undo calls or delivered messages. Never enable the retired
+daemon callback timer alongside native scheduling. Review held legacy pending
+callbacks and their former reminders explicitly before migration or cancellation.
+
+Workflow requests are pruned at gateway startup after the retention interval
+(default 30 days) beyond their deadline when no attempt remains active. Generated
+scripts, backups, native cron records and Hermes sessions have separate cleanup
+lifecycles. Forgetting caller notes does not clear those records. For exact privacy
+boundaries see [Security](../SECURITY.md#phone-workflow-authority-and-records).

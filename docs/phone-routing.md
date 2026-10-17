@@ -255,15 +255,19 @@ then waits for the recipient's reply and follows the brief. Names, relationships
 and previous conversations are used only when
 supplied or remembered, never invented.
 
-The optional `purpose` is text of at most 4,000 characters. The HTTP equivalent is
-`POST /v1/phone/calls` with `number`, `request_id`, and `purpose`; MCP clients use
-`start_phone_call(number, request_id, purpose="")`. Number-only calls remain valid.
-The brief belongs to the exact outgoing call and survives voice reconnects and
-conversation refreshes. It is not automatically saved as a lasting caller fact.
-Reusing a completed request ID returns its original result; changed arguments
-are rejected. A successful start means the voice backend is ready, not that the
-conversation or a booking has finished. Never automatically redial after an
-uncertain or failed attempt.
+The optional `purpose` is text of at most 4,000 characters. For owner Hermes tools,
+a purpose-bearing `hfp_phone_start_call` creates an immediate native phone workflow;
+acceptance verifies its schedule, not voice readiness or objective completion.
+Purpose-free owner calls remain raw manual control.
+
+Low-level `POST /v1/phone/calls` and MCP
+`start_phone_call(number, request_id, purpose="")` are immediate call controls,
+not equivalents of the scheduled objective lifecycle. Their brief belongs to the
+exact call, survives voice reconnects, and is not automatically a lasting note.
+Reusing a request ID returns its original result; changed arguments are rejected.
+A successful raw start means voice ready, not a completed conversation or booking.
+Raw controls do not redial. For managed objectives, Hermes may authorize bounded
+follow-ups after known outcomes; uncertain attempts must not be blindly retried.
 
 Gemini delegates real actions such as calendar lookups and meeting bookings to
 Hermes's configured tools, retaining the route's permissions and normal approvals.
@@ -274,13 +278,14 @@ reported as remembered.
 
 For “call me to remind me about my meeting,” use the configured owner destination
 and include the meeting title, time/timezone, and relevant details in the brief.
-For a future **phone** reminder, the owner-facing `hfp_phone_schedule_call` tool persists a
-one-shot callback in the HFP daemon and creates a Telegram reminder card through
-Hermes's scheduler. The daemon owns the future dial, so the callback survives a
-Hermes gateway restart and does not depend on an unauthenticated cron session.
-The destination must differ from the paired handset's own SIM number, which
-remains blocked from self-calling. A failed or uncertain dial is recorded and is
-never retried automatically.
+For a future **phone** request, `hfp_phone_schedule_call` creates a native Hermes
+one-shot executor job. Hermes retains the objective, evaluates the final call
+evidence and decides a bounded follow-up. The plugin executes and reports; it
+has no future-dial timer. Telegram reports the outcome and verified next step
+after each attempt rather than repeating call instructions at its start.
+The destination must differ from the paired handset's own SIM number.
+See [Hermes phone request lifecycle](hermes-call-workflows.md) for retry limits,
+calling hours, authorization, upgrade and data handling.
 
 Incoming Gemini calls wait for the caller's hello or opening request; Hermes then
 responds naturally. Outgoing calls and scheduled callbacks play a cached spoken
@@ -325,29 +330,19 @@ reminder. Actual bookings use the profile's configured calendar tools; each
 requested action needs its own successful tool result. Nothing automatically
 scans remembered appointment facts and turns them into schedules.
 
-`hfp_phone_status` includes pending callbacks and the ten most recent terminal
-outcomes. `hfp_phone_cancel_callback` cancels a pending callback and pauses its
-linked Telegram job. A firing call cannot be cancelled this way. For a changed
-time, use `hfp_phone_reschedule_callback` with the exact `callback_id`, current
-`expected_revision`, a stable `request_id`, and ISO-8601 `run_at` including its
-timezone offset. Callback and linked reminder identities stay the same. Only
-confirm success when `verification.status` is `applied`; report the requested
-and effective times and missing reminder explicitly otherwise. UTC epoch times
-and callback ISO timestamps are returned with timezone information. Stale
-revisions, firing/terminal callbacks and unresolved reminder linkage are rejected.
-Unresolved changes hold the callback from firing, survive restart, and reconcile
-the existing job without creating another call or notification. Manage standalone
-reminders with native `cronjob_manage`. Report partial cancellation failures.
-Calls more than five minutes overdue after downtime are marked failed instead
-of being dialled late. A successful callback result means voice became ready,
-not that the user heard the entire reminder. Callback/card creation is not an
-atomic transaction: report partial failures and keep returned IDs rather than
-automatically resubmitting both actions.
+`hfp_phone_status` exposes native phone requests, attempts, outcomes, decisions
+and revisions. Reschedule the exact pending callback with
+`hfp_phone_reschedule_callback`, its current revision, a stable operation ID and
+timezone-aware target. The pending native job keeps its identity. Cancel with
+`hfp_phone_cancel_callback` to prevent future attempts; ending an active call is
+separate. Scheduling acceptance is not objective completion.
 
-For repeatable callback creation, supply a stable `request_id` with an exact
-`run_at` and identical details. Reminder creation is claimed durably before native
-I/O; an uncertain creation/linkage returns a partial result on replay and never
-creates another reminder. Inspect the retained IDs before acting again.
+Both old reminder ID/time fields refer to the same native call job. Stale
+revisions, executing attempts and unresolved writes cannot create another call.
+An uncertain result requires reconciliation or owner guidance. Ordinary text
+reminders remain managed by native `cronjob_manage`. Hermes owns downtime
+catch-up policy. Repeat creation with an identical stable request ID and exact
+time to retrieve the same workflow; never recreate an uncertain call.
 
 Incoming Gemini sessions wait for caller speech rather than requesting an
 automatic introduction. Outgoing sessions use the cached opening described above
@@ -529,7 +524,7 @@ hfp-mcp caller forget --profile default --number +919876543210
 # Use --store /absolute/path/callers.sqlite3 for a remote/copied or custom-home store.
 ```
 
-Forgetting notes does not delete Hermes session history or downstream calendar records. Manage those through their owning system. Raw audio recording is off; daemon diagnostic retention remains 30 days. Hermes session retention is configured independently in Hermes.
+Forgetting notes does not delete workflow evidence, native jobs/sessions, generated scripts, backups, or downstream calendar records. Manage those through their owning system; see [workflow data handling](../SECURITY.md#phone-workflow-authority-and-records). Raw audio recording is off; daemon diagnostic retention remains 30 days. Hermes session retention is configured independently in Hermes.
 
 Bindings expire after ten seconds unless renewed every two seconds. A lost renewal ends the call; expiry prevents later caller-tool access. Hangup revokes the binding before stopping Hermes work. Hermes stop is cooperative and cannot undo an external operation already committed. External integration handlers must call `binding["check_active"]()` immediately before a write and provide their own operation-level idempotency.
 
@@ -717,7 +712,7 @@ register_caller_capability(
 
 Register from a Hermes plugin loaded in the receiving profile. Add the exact tool name to the phone policy. The capability belongs to `hfp_caller`; newly installed tools are denied until explicitly added. Handlers must return a Hermes-compatible result (JSON string or dictionary), enforce ownership using the supplied binding and never trust a model-supplied resource owner. Namespaced suffix matching and wildcards are not supported.
 
-No calendar backend or business workflow is bundled. Owner sessions can continue using their existing unrestricted Hermes integrations under normal approval rules.
+No calendar backend, built-in message inbox, or external business integration is bundled. Native phone-objective workflows are built in. Owner sessions can continue using their existing unrestricted Hermes integrations under normal approval rules.
 
 ## Multiple gateways
 

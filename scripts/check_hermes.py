@@ -114,6 +114,49 @@ async def exercise():
     else:
         raise AssertionError("Bridge capability endpoint accepted missing credentials")
 
+    # Use real native cron storage and firing fences in this disposable profile.
+    from hfp_mcp import reminders
+    from cron.jobs import get_job
+    import time
+    from datetime import datetime, timezone
+    original_destination = reminders.telegram_destination
+    reminders.telegram_destination = lambda: 'local'
+    try:
+        created = bridge.workflows.schedule({'request_id': 'compat-workflow', 'number': '+919876543210',
+            'purpose': 'Compatibility check; never place this call.',
+            'run_at': datetime.fromtimestamp(time.time()+3600, timezone.utc).isoformat()}, '')
+        assert created['ok'] and created['callback']['scheduler'] == 'hermes'
+        job = bridge.workflows.jobs.get(created['callback']['cron_job_id'])
+        assert job['no_agent'] and job['state'] == 'scheduled'
+        assert (home / 'scripts' / job['script']).is_file()
+        moved = bridge.workflows.reschedule({'callback_id': created['callback']['id'],
+            'request_id': 'compat-move', 'expected_revision': 0,
+            'run_at': datetime.fromtimestamp(time.time()+7200, timezone.utc).isoformat()})
+        assert moved['ok'] and moved['callback']['cron_job_id'] == job['id']
+        from cron.jobs import claim_job_for_fire
+        from cron.executions import create_execution, mark_execution_running, finish_execution
+        with bridge.workflows.jobs.scope():
+            assert claim_job_for_fire(job['id'], force=True)
+            execution = create_execution(job['id'], source='builtin', scheduled_instant=datetime.fromtimestamp(moved['callback']['run_at'], timezone.utc).isoformat())
+            assert mark_execution_running(execution['id'])
+        # Admission is persisted, but execute/dial is intentionally never invoked.
+        request_row, attempt, admitted = bridge.workflows.admit(created['callback']['id'], job['id'], execution['id'])
+        assert admitted and attempt['fire_owner']
+        grant = bridge.workflows.daemon_authority(request_row['id'], attempt['id'], execution['id'])
+        assert grant['authorized'] and grant['profile'] == 'default'
+        assert bridge.workflows.cancel(created['callback']['id'])['ok']
+        try:
+            bridge.workflows.daemon_authority(request_row['id'], attempt['id'], execution['id'])
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError('Cancelled workflow retained dialing authority')
+        with bridge.workflows.jobs.scope():
+            finish_execution(execution['id'], success=False, error='Synthetic admission only; no call was placed')
+        assert bridge.workflows.jobs.get(job['id'])['state'] == 'paused'
+    finally:
+        reminders.telegram_destination = original_destination
+
     store = bridge.store
     store.bind(
         session_id="hfp-test",
@@ -188,7 +231,7 @@ async def exercise():
     assert not move_reminder(job_id, changed_due + 600)['verified']
     store.close()
     print(
-        "PASS: native plugin registration, capability/auth gates, sessions, caller revocation, compaction lineage, deletion and reminder rescheduling/read-back"
+        "PASS: native plugin registration, capability/auth gates, sessions, caller revocation, compaction lineage, deletion, native phone job creation/move/cancel and reminder read-back"
     )
 
 

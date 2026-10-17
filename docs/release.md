@@ -1,5 +1,10 @@
 # Public preview release validation
 
+Current working-tree evidence: [native workflow verification, 8 October 2026](hermes-owner-flow-verification-2026-10-08.md).
+It records 658 source/installed tests and a coordinated installation; it is not a
+published release or hosted-CI result. Earlier validation sections below remain
+historical. New-flow recipient/Telegram rehearsals remain pending.
+
 Version: **0.1.1rc1**. The preview targets Hermes users. Release artifacts and this
 checklist prepare publication; no publishing action is part of these scripts.
 
@@ -28,7 +33,10 @@ Use the Python interpreter containing the tested Hermes installation:
 The integration script uses a new temporary home, removes inherited credentials,
 blocks external connections, and exercises real plugin registration, authenticated
 capabilities, session creation/resumption, caller revocation, compaction lineage,
-and deletion. Summaries are synthetic; it does not test model summary quality.
+and deletion. It also exercises native phone job creation, schedule move/read-back,
+firing-claim admission, cancellation and revoked execution authority. These are
+isolated checks without calls or messages; summaries are synthetic and do not
+establish model summary quality or live delivery.
 
 CI runs the daemon suite on Python 3.13. On PRs targeting `main`, release tags,
 and manual runs, it also builds distributions, installs each artifact in a fresh

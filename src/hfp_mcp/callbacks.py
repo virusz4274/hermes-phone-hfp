@@ -1,9 +1,7 @@
-"""Durable, one-shot outbound phone callbacks.
+"""Legacy callback archive and compatibility migration primitives.
 
-Hermes cron is the right owner for text/card delivery, but a cron run is not an
-authenticated phone call session.  Phone callbacks therefore live in the HFP
-daemon and are fired only after an authenticated owner request has persisted
-them here.
+Production no longer starts this scheduler. Native Hermes cron owns future calls;
+legacy pending rows are held for explicit review and terminal history is retained.
 """
 
 from __future__ import annotations

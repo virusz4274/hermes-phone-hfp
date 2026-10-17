@@ -37,9 +37,9 @@ class ContractError(ValueError):
         }
 
 
-def validate_call_purpose(value: str) -> str:
-    if not isinstance(value, str) or len(value) > MAX_CALL_PURPOSE_CHARS:
-        raise ContractError("invalid_argument", "call purpose must be text of at most 4000 characters")
+def validate_call_purpose(value: str, *, maximum: int = MAX_CALL_PURPOSE_CHARS) -> str:
+    if not isinstance(value, str) or len(value) > maximum:
+        raise ContractError("invalid_argument", f"call purpose must be text of at most {maximum} characters")
     return value.strip()
 
 
@@ -302,6 +302,8 @@ class RequestLedger:
             return None
         memory = None
         with self._lock:
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='phone_workflow_execution'").fetchone():
+                self._db.execute("DELETE FROM phone_workflow_execution WHERE json_extract(data,'$.started_at')<?", (cutoff,))
             if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
                 saved = self._db.execute("SELECT data FROM call_memory_runs WHERE call_id=?", (call_id,)).fetchone()
                 memory = json.loads(saved[0]).get("result") if saved else None
@@ -327,6 +329,8 @@ class RequestLedger:
             ):
                 cursor = self._db.execute(f"DELETE FROM {table} WHERE {column} < ?", (cutoff,))
                 counts += max(0, cursor.rowcount)
+            if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='phone_workflow_execution'").fetchone():
+                self._db.execute("DELETE FROM phone_workflow_execution WHERE json_extract(data,'$.started_at')<?", (cutoff,))
             if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='call_memory_runs'").fetchone():
                 self._db.execute("DELETE FROM call_memory_runs WHERE json_extract(data,'$.updated_at')<? "
                                  "AND COALESCE(json_extract(data,'$.receipt.deadline'),0)<?", (cutoff, time.time()))

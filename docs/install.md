@@ -244,3 +244,14 @@ The changes are additive and preserve conversation/session history. Set
 `background_tasks: true` only on the intended admin policy after configuring the
 profile's native Telegram home channel. No new service, sender plugin or cron job
 is installed. See [natural task handling](phone-routing.md#natural-task-handling).
+
+## Scheduled phone requests
+
+Purpose-bearing owner calls and scheduled callbacks require the native Hermes
+workflow capabilities listed in [compatibility](compatibility.md#native-phone-workflows).
+The plugin does not provide a daemon-timer fallback. Configure native Telegram
+home delivery before promising phone outcome reports. Start with a read-only
+status/doctor check; a saved schedule is not proof of a successful call or message.
+Use [the workflow guide](hermes-call-workflows.md) for limits and live rehearsals,
+and [maintenance](maintenance.md#native-phone-workflow-upgrade) before upgrading
+an existing installation or reviewing held legacy callbacks.

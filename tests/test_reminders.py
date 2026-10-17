@@ -46,12 +46,15 @@ def plugin(tmp_path, monkeypatch):
                           register_tool=lambda **kw: registered.update({kw['name']: kw}))
     hermes_bridge.register(ctx)
     bridge = hermes_bridge._BRIDGES[-1]
+    from tests.test_phone_workflows import FakeJobs
+    bridge.workflows.jobs = FakeJobs(jobs)
     bridge.store.bind(session_id='hfp-admin', call_id='call', profile='default',
                       number='+919876543210', policy={'admin': True}, ttl=60,
                       timezone='Asia/Kolkata')
     bridge.store.bind(session_id='hfp-guest', call_id='guest', profile='default',
                       number='+919876543211', policy={'admin': False, 'tools': []}, ttl=60)
     yield registered, posts, jobs, bridge
+    bridge.workflows.store.close()
     bridge.store.close()
 
 
@@ -69,22 +72,21 @@ def test_phone_reminder_is_native_and_independent_of_bluetooth(plugin):
     assert 'final response' in job['prompt'] and 'Do not use tools' in job['prompt']
 
 
-def test_callback_resolves_bound_number_shares_exact_due_and_links_card(plugin):
+def test_callback_resolves_bound_number_and_has_one_native_executor(plugin):
     result = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
-    assert result['status'] == 'scheduled' and result['warning']
-    posted = plugin[1][0][1]
-    assert posted['number'] == '+919876543210'
-    assert datetime.fromisoformat(plugin[2][0]['schedule']).timestamp() == pytest.approx(posted['run_at'], abs=0.000001, rel=0)
-    assert plugin[1][2] == ('/v1/phone/callbacks/cb-test/reminder', {'job_id': 'job-1'})
+    assert result['status'] == 'scheduled' and result['verification']['verified']
+    assert result['callback']['number'] == '+919876543210'
+    assert result['callback']['cron_job_id'] == result['callback']['reminder_job_id']
+    assert not plugin[1] and len(plugin[2]) == 1 and plugin[2][0]['no_agent']
     assert invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2}, sid='owner-chat').get('error')
 
 
-def test_partial_failure_keeps_saved_callback_and_no_false_card_success(plugin, monkeypatch):
+def test_missing_telegram_holds_request_without_claiming_schedule_success(plugin, monkeypatch):
     monkeypatch.setattr(reminders, 'telegram_destination', lambda: (_ for _ in ()).throw(ValueError('No Telegram home')))
     result = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
-    assert result['ok'] and result['status'] == 'partial'
-    assert not result['reminder']['scheduled']
-    assert len(plugin[1]) == 3 and not plugin[2]  # claim and read-back are independent of reminder failure
+    assert not result['ok'] and result['status'] == 'unverified'
+    assert plugin[3].workflows.store.rows()[0]['status'] == 'holding'
+    assert not plugin[1] and not plugin[2]
     result = invoke(plugin, 'hfp_phone_schedule_reminder', {'purpose': 'Meeting', 'delay_minutes': 2})
     assert result['ok'] is False
 
@@ -96,47 +98,11 @@ def test_restricted_and_expired_phone_sessions_cannot_schedule_or_cancel(plugin)
     assert not plugin[1] and not plugin[2]
 
 
-def test_cancel_pauses_linked_native_reminder(plugin):
-    result = invoke(plugin, 'hfp_phone_cancel_callback', {'callback_id': 'cb-test'})
-    assert result['ok'] and result['reminder_cancelled']
-    assert plugin[2] == [{'action': 'pause', 'job_id': 'job-1'}]
-
-
-@pytest.mark.parametrize('lost_creation_response', [False, True])
-def test_creation_replay_never_creates_second_reminder(plugin, tmp_path, monkeypatch, lost_creation_response):
-    from datetime import timezone
-    from hfp_mcp.callbacks import CallbackScheduler
-    from hfp_mcp.hermes_bridge import register
-    scheduler = CallbackScheduler(tmp_path / 'callbacks.db', None)
-    def control(path, body=None):
-        if path == '/v1/phone/callbacks':
-            return {'ok': True, 'callback': scheduler.schedule(**body)}
-        callback_id = path.split('/')[4]
-        if path.endswith('/reminder-claim'): return {'ok': True, 'acquired': scheduler.claim_reminder(callback_id)}
-        if path.endswith('/reminder'): scheduler.link_reminder(callback_id, body['job_id']); return {'ok': True}
-        if path.endswith('/verify'): return {'ok': True, 'callback': scheduler.record_verification(callback_id, **body)}
-        return {'ok': True, 'callback': scheduler.get(callback_id)}
-    monkeypatch.setattr(phone_cli, 'control', control)
-    registered = {}
-    register(SimpleNamespace(profile_name='default', register_platform_handler=lambda *a: None,
-        register_hook=lambda *a: None, register_tool=lambda **kw: registered.update({kw['name']: kw})))
-    extra = hermes_bridge._BRIDGES[-1]
-    if lost_creation_response:
-        original = sys.modules['tools.cronjob_tools'].cronjob
-        def lost(**args): original(**args); raise TimeoutError('response lost after creation')
-        monkeypatch.setattr(sys.modules['tools.cronjob_tools'], 'cronjob', lost)
-    args = {'purpose': 'Meeting', 'request_id': 'stable',
-            'run_at': datetime.fromtimestamp(time.time() + 120, timezone.utc).isoformat()}
-    first = json.loads(registered['hfp_phone_schedule_call']['handler'](args, session_id='hfp-admin'))
-    scheduler.close_db()
-    scheduler = CallbackScheduler(tmp_path / 'callbacks.db', None)
-    second = json.loads(registered['hfp_phone_schedule_call']['handler'](args, session_id='hfp-admin'))
-    assert first['callback']['id'] == second['callback']['id'] and len(plugin[2]) == 1
-    assert second['status'] == ('partial' if lost_creation_response else 'scheduled')
-    if lost_creation_response:
-        with pytest.raises(ValueError, match='unresolved'):
-            scheduler.begin_reschedule('cb-stable', request_id='move', expected_revision=0, run_at=time.time() + 600)
-    scheduler.close_db(); extra.store.close()
+def test_cancel_pauses_native_call_without_hangup(plugin):
+    created = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
+    result = invoke(plugin, 'hfp_phone_cancel_callback', {'callback_id': created['callback']['id']})
+    assert result['ok'] and not result['active_call_ended']
+    assert plugin[3].workflows.jobs.get(created['callback']['cron_job_id'])['state'] == 'paused'
 
 
 @pytest.mark.parametrize('continued', [True, False])

@@ -1,5 +1,11 @@
 # Gemini phone startup fix
 
+Historical build/rehearsal evidence; retain its original observations and limits.
+For current scheduling and deployment evidence, see
+[native phone workflows](hermes-call-workflows.md) and
+[the subsequent workflow verification](hermes-owner-flow-verification-2026-10-08.md).
+Older scheduler/reminder statements below do not describe the current lifecycle.
+
 Update: the [caller-first greeting follow-up](caller-first-greeting-2026-10-08.md)
 is now deployed. It removes the automatic incoming greeting prompt while keeping
 the startup guard. The evidence below records the preceding guarded build.

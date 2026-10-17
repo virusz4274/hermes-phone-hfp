@@ -1,5 +1,11 @@
 # Gemini phone demo readiness — 2026-10-07
 
+Historical build/rehearsal evidence; retain its original observations and limits.
+For current scheduling and deployment evidence, see
+[native phone workflows](hermes-call-workflows.md) and
+[the subsequent workflow verification](hermes-owner-flow-verification-2026-10-08.md).
+Older scheduler/reminder statements below do not describe the current lifecycle.
+
 Update on 8 October: incoming rehearsal exposed a Gemini tool-schema startup
 failure. See the [startup fix and replacement build](gemini-startup-fix-2026-10-08.md).
 The subsequent [caller-first opening change](caller-first-greeting-2026-10-08.md)

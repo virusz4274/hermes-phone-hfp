@@ -1,5 +1,11 @@
 # Cached outgoing opening — 8 October 2026
 
+Historical build/rehearsal evidence; retain its original observations and limits.
+For current scheduling and deployment evidence, see
+[native phone workflows](hermes-call-workflows.md) and
+[the subsequent workflow verification](hermes-owner-flow-verification-2026-10-08.md).
+Older scheduler/reminder statements below do not describe the current lifecycle.
+
 The user received a callback but needed to say hello to start Gemini. They
 requested an audible outgoing opening and selected the cached spoken phrase:
 “Hello, this is Hermes, an AI assistant.” This supersedes the outgoing

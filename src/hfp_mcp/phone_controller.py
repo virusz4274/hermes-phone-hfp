@@ -587,6 +587,22 @@ class PhoneController:
         )
 
     async def delegate(self, request):
+        call_id = self.call_id
+        result = await self._delegate(request)
+        if self.ledger and call_id and isinstance(result, dict):
+            status = result.get('status', 'unknown')
+            detail = {'tool': request.name, 'request_id': request.request_id,
+                      'action': request.arguments.get('action'), 'status': status}
+            for key in ('revision', 'persistent', 'task_id', 'run_id'):
+                if key in result:
+                    detail[key] = result[key]
+            detail['verified_write'] = (request.name == 'phone_notes' and request.arguments.get('action') == 'update'
+                                        and status == 'ok' and result.get('persistent') is True)
+            self.ledger.audit('phone_tool_receipt', 'ok' if status == 'ok' else 'pending',
+                              call_id=call_id, detail=detail)
+        return result
+
+    async def _delegate(self, request):
         current_id, phase, _ = self.identity(self.snapshot())
         if not self.binding or not self.api or current_id != self.call_id or phase != "active":
             return {"status": "error", "message": "This phone session has ended."}

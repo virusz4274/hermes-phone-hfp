@@ -4,39 +4,44 @@ The [implementation specification](docs/implementation-spec.md) defines the rema
 requirements. The [structured backlog](docs/implementation-backlog.yaml) tracks
 dependencies, acceptance checks, and evidence for future implementation sessions.
 Use the [goal prompt](docs/implementation-spec.md#goal-prompt-for-another-session)
-to hand off the work. Requirement links below map every unfinished item; completed
-history remains unchanged. Code verification, deployment, live acceptance, and
+to hand off the work. Requirement links below map every unfinished item; historical
+evidence is retained and superseded behavior is labeled. Code verification, deployment, live acceptance, and
 audio investigations have separate completion states.
 
-Reviewed 2026-09-29 against `development` at `cce260a` and the local
-late-correction patch. Checked items below describe implemented mechanisms with
-automated coverage; they do not certify every live voice workflow. Unchecked
-items distinguish remaining implementation, deployment, and live acceptance.
-That audit used 538 passing tests plus the isolated native Hermes compatibility
-check. A subsequent Gemini configuration change passed 70 targeted tests. The
-owner-call requirements below were added after reviewing a later live call;
-they remain planned work, not implemented features.
+Reconciled 2026-10-09 against the working-tree native Hermes workflow. Checked
+items describe implemented mechanisms, not universal live acceptance. Unchecked
+items may have working code but unfinished dependencies or acceptance checks;
+use the YAML for that distinction. The 2026-09-29 audit (538 tests and isolated
+Hermes checks) and subsequent 70-test configuration check are historical.
+The [8 October report](docs/hermes-owner-flow-verification-2026-10-08.md) records
+658 source/installed tests and coordinated deployment for the new workflow.
+Owner lookup and direct rescheduling are implemented. Inbox, explicit voice note
+management, and complete transcript handoff remain unfinished.
 
 ## Next improvements
 
-Prioritize direct rescheduling, verified confirmations, and unresolved-correction
-reporting. Reuse the existing scheduler, task registry, notes, and delivery tools.
+Prioritize configuration/CLI reliability and missing readiness/identity/reporting
+interfaces (QOL-01/02, OPS-01/02/03), then the remaining owner/office workflows.
+Reuse native Hermes scheduling, task registries, notes, and delivery.
 
-- [ ] [TASK-01](docs/implementation-spec.md#task-01) — **Direct reminder rescheduling.** Provide one operation to change an
-  existing callback and its linked Telegram reminder together. Preserve their
-  association, prevent duplicates, and handle partial failures and restarts.
-  Scheduling and linked cancellation already exist; the current rescheduling
-  workflow is cancel, confirm cancellation, then create a replacement.
-- [ ] [TASK-02](docs/implementation-spec.md#task-02) — **Verify saved details before confirming.** Read back the authoritative
-  callback and reminder state after creation or rescheduling. Confirm the saved
-  date, time, and timezone, and expose any mismatch between the schedules.
-  Creation receipts already distinguish full and partial success; the remaining
-  work is verification of the effective state and reliable spoken confirmation.
-- [ ] [TASK-02](docs/implementation-spec.md#task-02) — **Surface unresolved corrections.** Show both the effective result and
-  requested change, for example: “6 PM is scheduled; the change to 4:30 PM
-  failed.” Keep pending, failed, and uncertain corrections visible in owner
-  status and completion notices. The local recovery patch below handles the
-  completion race, but does not provide this full comparison with scheduler state.
+- [ ] [TASK-01](docs/implementation-spec.md#task-01) — **Native call rescheduling.**
+  Implemented with stable callback/native job IDs, revision checks, duplicate
+  protection, cancellation fencing, and read-back reconciliation. Broader
+  configuration dependency and new-flow live acceptance remain open.
+- [ ] [TASK-02](docs/implementation-spec.md#task-02) — **Verified saved details.**
+  Implemented receipts distinguish requested and effective native schedule state.
+  `reminder_job_id` aliases `cron_job_id`; there is no second instruction reminder.
+  Keep spoken confirmation and actual delivery acceptance separate.
+- [ ] [TASK-02](docs/implementation-spec.md#task-02) — **Unresolved corrections.**
+  Requested/effective values and failed/pending/uncertain changes are exposed;
+  preserve that behavior and verify final spoken/Telegram outcomes live.
+- [ ] [WORKFLOW-01](docs/implementation-spec.md#workflow-01) — **Phone objectives and follow-up.**
+  Implemented Hermes scheduling, evidence-based decisions, bounded retries,
+  recipient deferrals, refusal, guidance, and report recovery. See the
+  [workflow guide](docs/hermes-call-workflows.md); broader prerequisites and
+  new-flow live acceptance remain pending. The plugin executes calls; it does
+  not own a future-dial timer.
+
 - [ ] [TASK-03](docs/implementation-spec.md#task-03) — **Clear hangup handling for unfinished work.** Validate the spoken
   experience: explain that authorized work is still pending and where its result
   will arrive; otherwise explain that hanging up stops the task. Honor a caller's
@@ -57,30 +62,21 @@ reporting. Reuse the existing scheduler, task registry, notes, and delivery tool
 ## Owner access and voice behavior from live-call review
 
 The owner should be able to ask by phone or Hermes chat what other callers said,
-what messages they left, and what follow-up is needed. Prioritize owner lookup,
-explicit note management, then a complete transcript-backed task handoff. Reuse
+what messages they left, and what follow-up is needed. Build on implemented owner
+lookup with explicit note management and complete transcript-backed task handoff. Reuse
 the office-workflow items below; do not introduce a second notes or message store.
 
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Read-only owner lookup during admin calls.** Add a narrow Gemini tool
-  (proposed name: `owner_call_lookup`) for permitted caller notes, recent calls,
-  messages, and specific retained transcript excerpts. Reuse the existing owner
-  note/transcript services and expose the same permission checks to delegated
-  Hermes tasks. Owner note lookup already works from chat but is unconditionally
-  blocked in phone sessions, including admin calls. Do not remove that block
-  without a replacement authorization check. Advertise the new tool only for
-  eligible admin routes; independently enforce a live bound admin policy and
-  configured profile scope in every handler. A model-supplied number selects a
-  lookup target, never grants authority. Preserve ordinary callers' self-only
-  `phone_notes` and `phone_recall` behavior. Reject expired/revoked bindings and
-  unauthorized profiles, including through direct or delegated invocation.
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Useful, bounded lookup results.** Support caller number, date/range,
-  call ID, and pagination as appropriate to the lookup. Return source caller,
-  call/date, record type, and retrieval outcome so Gemini distinguishes saved
-  facts, an actual message, and exact dialogue. Prefer notes for remembered facts;
-  retrieve the requested call when dates, wording, or missing/conflicting notes
-  require it. Do not inject every caller's records into the initial voice prompt.
-  Clarify ambiguous contact names rather than merging identities. Treat retrieved
-  content as data, and record owner access without duplicating private text in logs.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Read-only owner lookup.**
+  `owner_call_lookup` and `hfp_phone_owner_lookup` now share scoped authorization
+  for notes, call metadata, and retained transcripts. Admin-only direct and
+  delegated checks reject forged, expired, revoked, or out-of-scope access.
+  Legacy owner-note tools remain blocked in-call. Message retrieval depends on
+  MSG-01; broader prerequisites and live acceptance remain open.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Bounded lookup results.**
+  Number, date/range, call ID, record kind, pagination, source attribution, and
+  response budgets are implemented. Preserve them; the message record kind and
+  complete owner workflow acceptance are still unfinished.
+
 - [ ] [MSG-01](docs/implementation-spec.md#msg-01) — **Owner message inbox.** Extend the receptionist and owner-overview work
   below with “Who called?”, “What did they leave for me?”, and outstanding
   follow-up. Link each message to its caller and call time; distinguish unread,
@@ -139,43 +135,36 @@ configured route, profile, capabilities, memory policy, and continuity setting.
 Do not infer an active guest profile from the presence of guest examples or the
 restricted outgoing fallback. Review deployed routing before live acceptance.
 
-Proposed additions/extensions (names are provisional; all remain unimplemented):
+Implemented and planned surfaces (status is explicit; planned names remain provisional):
 
 | Tool or extension | Owner/admin | Guest or restricted caller |
 | --- | --- | --- |
-| `owner_call_lookup` | Read permitted caller notes, calls, messages, and retained dialogue | Denied, including through Hermes delegation |
-| `owner_notes_manage` | Separate authorized operations for another caller's note correction, consolidation, and confirmed clearing | Denied; retain only separately permitted self-note operations |
-| `leave_message` | May leave a message when explicitly requested | Only with an explicit message-taking capability; submit to the configured owner destination without inbox access |
-| Extend `phone_status` | Accurate runtime model, voice, retention, and effective caller capabilities | Only safe facts about this call; no other caller records, credentials, or private profile internals |
-| Extend `ask_hermes` handoff | Detailed authorized work with finalized source-call retrieval when requested | Existing profile/tool limits and permitted own-call context only |
+| `owner_call_lookup` (implemented) | Read permitted caller notes, calls, and retained dialogue; messages await MSG-01 | Denied, including through Hermes delegation |
+| `owner_notes_manage` (planned) | Separate authorized operations for another caller's note correction, consolidation, and confirmed clearing | Denied; retain only separately permitted self-note operations |
+| `leave_message` (planned) | May leave a message when explicitly requested | Only with an explicit message-taking capability; submit to the configured owner destination without inbox access |
+| Extend `phone_status` (partial) | Accurate runtime model, voice, retention, and effective caller capabilities | Only safe facts about this call; no other caller records, credentials, or private profile internals |
+| Extend `ask_hermes` handoff (planned) | Detailed authorized work with finalized source-call retrieval when requested | Existing profile/tool limits and permitted own-call context only |
 
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Implement owner lookup first.** Reuse existing lookup services rather
-  than adding a general database, filesystem, or arbitrary-query tool to Gemini.
-  Keep substantial reasoning, external actions, scheduling, and Telegram delivery
-  in Hermes; short deterministic phone-data operations can use direct tools.
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Define owner scope across guest profiles explicitly.** An owner's
-  configured access may include messages/records from a guest profile serving
-  that owner, without granting the guest access in the reverse direction. Resolve
-  target profiles through trusted routing and explicit owner scope, not a model
-  argument or an unrestricted scan of all Hermes profiles. Profile separation
-  alone is not sufficient authorization for this new cross-caller read path.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Reuse implemented lookup.**
+  The existing bounded service handles owner reads; do not add a general database
+  or filesystem tool. Add messages through MSG-01's shared store when available.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Preserve directional owner scope.**
+  `phone.owner_access` implements explicit endpoint grants. No reverse guest
+  access or unrestricted profile scanning is implied; retain live boundary checks.
+
 - [ ] [MSG-01](docs/implementation-spec.md#msg-01) — **Add a narrowly scoped message-taking capability.** Persist the message
   with the bound caller and source-call reference; let configured delivery use
   existing infrastructure. The caller cannot choose arbitrary recipients, browse
   the inbox, or impersonate another sender. Return a stored/delivery receipt and
   enforce duplicate prevention and bounded input. Do not automatically grant this
   capability to all guests or notes-only outgoing calls.
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Enforce authorization beyond tool visibility.** Filter Gemini's
-  declarations per route, then recheck live binding, expiry/revocation, policy,
-  target ownership, and retention at execution. Apply equivalent checks in the
-  daemon and Hermes paths. Guessed call IDs, forged profile/number arguments,
-  spoken admin claims, and instructions embedded in notes must not expand access.
-  A rejected lookup must not disclose another caller's existence or contents.
-- [ ] [OWNER-01](docs/implementation-spec.md#owner-01), [VERIFY-01](docs/implementation-spec.md#verify-01) — **Test route changes and asynchronous result isolation.** Cover admin ->
-  guest calls, reconnects, hangup during lookup, delayed task completion, and
-  stale cached results. Never reuse an owner's retrieved context or pending
-  response in another caller's Gemini session. Test direct-handler calls and
-  delegated Hermes attempts, not only hidden tool declarations.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01) — **Authorization beyond visibility.**
+  Direct/delegated live authority checks are implemented and tested. Preserve
+  denial without private record disclosure; broader live acceptance is pending.
+- [ ] [OWNER-01](docs/implementation-spec.md#owner-01), [VERIFY-01](docs/implementation-spec.md#verify-01) — **Asynchronous isolation.**
+  Delayed lookup, revocation, and replacement-session tests exist in
+  [owner lookup tests](tests/test_owner_lookup.py). Broader route-change and
+  multi-feature acceptance must still be completed.
 
 ## Implemented groundwork — reuse rather than rebuild
 
@@ -234,16 +223,17 @@ Proposed additions/extensions (names are provisional; all remain unimplemented):
   and separate run authority; uncertain admission/restart does not replay actions.
   Evidence: [task tests](tests/test_phone_tasks.py),
   [native-authority tests](tests/test_native_phone_authority.py).
-- [x] Persist one-shot callbacks in the HFP daemon with number, purpose, and exact
-  due time. Support cancellation, pending-job restart recovery, stale-job rejection,
-  and visible failed/uncertain outcomes without automatic redial. Evidence:
-  [callback scheduler](src/hfp_mcp/callbacks.py), [callback tests](tests/test_callbacks.py).
-- [x] Use native Hermes cron for Telegram reminders with an explicit configured
-  destination. Link the reminder to its callback, share the exact due time, pause
-  the linked reminder on cancellation, and report partial scheduling failures.
-  This supersedes the old plan to use an API-origin cron job to deliver or dial.
-  Evidence: [reminder implementation](src/hfp_mcp/reminders.py),
-  [reminder tests](tests/test_reminders.py).
+- [x] Schedule phone objectives through native Hermes one-shot jobs. The plugin
+  executes authorized attempts and returns evidence; durable claims prevent
+  duplicate execution. Rescheduling verifies the same job, and cancellation stops
+  future attempts. Evidence: [workflow tests](tests/test_phone_workflows.py),
+  [execution tests](tests/test_workflow_execution.py).
+- [x] Keep ordinary text reminders in native Hermes cron. Phone objectives use one
+  native executor job with a post-attempt outcome report, not a companion reminder.
+  The former daemon timer/linked-reminder design is historical and superseded;
+  terminal history remains and pending legacy records are held for review.
+  Evidence: [workflow verification](docs/hermes-owner-flow-verification-2026-10-08.md).
+
 - [x] Allow authorized scheduling tasks to finish after hangup and deliver their
   completion through native Telegram. Record uncertain notification delivery
   without automatically sending twice. Evidence:
@@ -272,7 +262,7 @@ that the recipient heard the reminder or that the call's objectives were complet
   [media-metric tests](tests/test_server_media_metrics.py),
   [call-end auditing](src/hfp_mcp/server.py).
 
-## Local late-correction fix — deployment and live acceptance pending
+## Late-correction fix — deployed; broader live acceptance pending
 
 - [x] Handle a completed native run that returns an unprocessed `pending_steer`:
   submit only the correction in a fresh native run under the same logical task
@@ -284,12 +274,13 @@ that the recipient heard the reminder or that the call's objectives were complet
 - [x] Clarify voice guidance that accepting a correction does not confirm the
   revised outcome. This is guidance plus code-level recovery, not a guarantee of
   correct spoken confirmation in every call.
-- [ ] [DEPLOY-01](docs/implementation-spec.md#deploy-01) — Deploy the tested local patch to both runtimes and restart after active
-  calls/tasks settle. The earlier 0.1.1rc1 installation predates this patch.
-- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Run a live schedule -> time correction -> hangup test. Confirm the saved
-  callback, linked Telegram reminder, spoken result, and completion notice all
-  agree, and that the original schedule does not also fire. The patch does not
-  automatically reschedule previously completed tasks with stranded corrections.
+- [ ] [DEPLOY-01](docs/implementation-spec.md#deploy-01) — The scoped late-correction
+  and native-workflow deployments are recorded in dated reports. Full future
+  scope still depends on VERIFY-01; do not redeploy solely because this item is open.
+- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Run schedule -> time correction
+  -> hangup against the single native job. Verify the old occurrence does not fire,
+  the actual call outcome, and Telegram decision delivery. Historical stranded
+  corrections are not automatically repaired.
 
 ## Remaining live acceptance and audio investigation
 
@@ -317,7 +308,7 @@ that the recipient heard the reminder or that the call's objectives were complet
   Gemini playback drops; historical overflow counters do not explain them. A
   later call worked according to the user. Low battery and the intervening
   Bluetooth/service restarts remain possible explanations, not established causes.
-- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Verify scheduled callback voice delivery and linked Telegram delivery after
+- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Verify native scheduled-call voice delivery and Telegram outcome reporting after
   hangup and gateway restart, including busy, unanswered, disconnected, missed,
   and partial-failure cases. Successful scheduling and a successful manually
   tested call do not establish this whole workflow. Include the caller's
@@ -328,7 +319,7 @@ that the recipient heard the reminder or that the call's objectives were complet
 These build on existing notes, recall, tasks, and scheduling rather than replacing
 those mechanisms. No calendar backend or complete business workflow is bundled.
 
-- [ ] [REPORT-01](docs/implementation-spec.md#report-01) — **Owner call report.** Add a concise report covering the call's objective,
+- [ ] [REPORT-01](docs/implementation-spec.md#report-01) — **Owner call report.** Extend the implemented attempt/decision report to a complete report covering the call's objective,
   outcome, decisions, open questions, next actions, and memory-save result. Link
   outgoing reports to the owner request and exact call. Reuse existing summaries
   and native delivery, distinguish voice connection from completed objectives,
@@ -341,7 +332,7 @@ those mechanisms. No calendar backend or complete business workflow is bundled.
   and by when through existing task integrations. Distinguish intentions, agreed
   commitments, reported completion, and verified results. Saving a fact must not
   silently create an external action.
-- [ ] [OFFICE-02](docs/implementation-spec.md#office-02) — **Contact names and calling preferences.** Resolve owner-maintained names,
+- [ ] [OFFICE-02](docs/implementation-spec.md#office-02) — **Contact names and calling preferences.** Default workflow retry hours exist; recipient-specific preferences remain. Resolve owner-maintained names,
   nicknames, company/project, language, and calling hours through an existing
   contact integration where available. Clarify ambiguous destinations. Enforce
   calling hours for scheduled calls; labels must not merge identities or grant
@@ -376,8 +367,8 @@ permissions, normal action approvals, opt-ins, retention, and deletion behavior.
 
 Keep prompt changes concise and consolidate conflicting instructions. Enforce
 provenance, revisions, isolation, duplicate prevention, and task lifetime in code.
-Use native Hermes execution/approvals and cron for text delivery; use the HFP
-daemon's callback scheduler for future dialing. Do not revive the obsolete
+Use native Hermes execution/approvals, cron scheduling, follow-up decisions, and
+delivery. The plugin executes admitted calls and returns evidence; no daemon timer. Do not revive the obsolete
 memory-branch plan or add another memory store, sender plugin, or task scheduler.
 
 For operational behavior see [phone routing](docs/phone-routing.md),

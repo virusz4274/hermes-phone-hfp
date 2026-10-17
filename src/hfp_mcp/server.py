@@ -1356,7 +1356,9 @@ async def _run_handshake_and_session(context: RFCOMMConnectionContext) -> None:
                 call_id=call_id,
                 caller_number=caller_number,
                 role=caller_role,
-                detail={"direction": getattr(info.direction, "name", "unknown").lower()},
+                detail={"direction": getattr(info.direction, "name", "unknown").lower(),
+                        "termination_reason": info.termination_reason or "disconnected",
+                        "was_active": info.was_active, "call_generation": _state.call_generation},
             )
             if call_id:
                 summary = "Call completed. No transcript was retained."
@@ -3568,7 +3570,7 @@ def _create_phone_controller(routing):
 
 
 @mcp.tool()
-async def start_phone_call(number: str, request_id: str, purpose: str = "") -> dict:
+async def start_phone_call(number: str, request_id: str, purpose: str = "", *, workflow_brief: bool = False) -> dict:
     """Start an explicitly requested interactive call with an optional owner brief.
 
     Include every requested objective and relevant context (recipient, introduction,
@@ -3576,7 +3578,10 @@ async def start_phone_call(number: str, request_id: str, purpose: str = "") -> d
     chat. Success means voice is ready, not that the conversation/task is complete.
     """
     try:
-        brief = validate_call_purpose(purpose)
+        # Public call requests are limited at HTTP/tool ingress. Native workflow
+        # execution adds the original date and verified progress without losing
+        # any of the owner's accepted 4,000-character objective.
+        brief = validate_call_purpose(purpose, maximum=12000 if workflow_brief else 4000)
         request_id = validate_request_id(request_id)
         controller = _phone_controller
         if controller is None:
@@ -3693,7 +3698,12 @@ def create_http_app(
                 region=routing.region,
                 reconcile_reminder=_reminder_reconciler(routing),
             )
-            await _callback_scheduler.start()
+            _callback_scheduler.retired = True
+            # Legacy records remain readable, but their daemon timer is retired.
+            # Unverified pending schedules must never become a second scheduler.
+            with _callback_scheduler._lock, _callback_scheduler._db:
+                _callback_scheduler._db.execute("UPDATE phone_callbacks SET status='uncertain',error=? WHERE status IN ('scheduled','rescheduling')",
+                    ('Legacy schedule held: migrate to a verified native Hermes phone request before execution.',))
         try:
             async with session_lifespan(starlette_app):
                 yield

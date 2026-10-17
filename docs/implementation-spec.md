@@ -6,9 +6,14 @@ or autonomous coding session. Read it together with the
 [structured backlog](implementation-backlog.yaml). The backlog records dependencies,
 acceptance checks, and progress; this document defines the intended behavior.
 
-Status: approved implementation scope; implementation and live acceptance remain
-pending until individually verified. Writing these documents does not implement
-the requirements or authorize live operations.
+Status reconciled 2026-10-09: this specification includes implemented groundwork
+and remaining requirements. Item-level progress and evidence live in the backlog;
+unchecked dependencies or live gates do not mean existing code is absent.
+The accepted architecture is Hermes-owned scheduling and follow-up decisions,
+with the plugin executing authorized calls and returning evidence. See the
+[current workflow](hermes-call-workflows.md) and its
+[8 October verification](hermes-owner-flow-verification-2026-10-08.md).
+Documentation reconciliation does not authorize live operations.
 
 ## Baseline and completion boundary
 
@@ -32,9 +37,12 @@ physical calls, provider behavior, and audio investigations have separate items.
 They can remain pending without implying that the whole deployed system has been
 validated. A blocked implementation item still prevents code-scope completion.
 
-This scope does not add a web dashboard, new calendar/contact service, alternate
-scheduler, general database tool for Gemini, new identity challenge, or automatic
-calling/delivery retries. Actual integrations remain operator-configured.
+This scope does not add a web dashboard, new calendar/contact service, second
+scheduler, general database tool for Gemini, or new identity challenge. Hermes
+may authorize bounded outcome-driven follow-up calls under WORKFLOW-01. The
+plugin never independently redials or blindly replays an uncertain attempt or
+report. Delivery uses native Hermes receipts and retry policy. Actual business
+integrations remain operator-configured.
 
 ## How to execute and record progress
 
@@ -60,18 +68,26 @@ The YAML uses stable requirement and acceptance IDs. Item status is `pending`,
 `tested_revision`, and `references`. `blocker` is null or an object with `reason`
 and `needed_to_resume`. Do not renumber completed IDs. Add acceptance checks when
 needed without deleting failed evidence. Source references identify TODO entries
-by their original opening text, independent of shifting line numbers.
+by their current opening text, independent of shifting line numbers; update those
+selectors when reconciling wording. Superseded acceptance definitions and evidence
+are retained under `historical_acceptance`, with `source_acceptance_id` identifying
+the original check. Only current `acceptance` entries count toward completion;
+`progress_note` records partial implementation without overriding dependencies.
 
 ## Shared architecture and behavior
 
 - The daemon remains the sole Bluetooth/audio owner. Hermes remains responsible
   for substantial reasoning, external tools, approvals, native task sessions,
-  cron reminders, and Telegram delivery. Short deterministic phone-data operations
-  may be direct voice tools.
-- Reuse daemon call/audit storage and the routed profile's caller store. New
-  structured records, operation receipts, or inbox tables belong in those stores;
-  do not introduce a second notes database or delivery service. Use additive,
-  repeatable migrations and test upgrade from existing data.
+  native cron schedules, follow-up decisions, and Telegram delivery. The plugin
+  executes admitted call attempts and returns evidence; it has no future-dial timer.
+  Short deterministic phone-data operations may be direct voice tools.
+- Reuse daemon call/audit storage and the routed profile's caller store for their
+  existing responsibilities. The accepted workflow adds profile-local
+  `hfp-phone/workflows.sqlite3` and `phone_workflow_execution` receipts in the daemon
+  ledger. Native cron owns jobs/execution claims; profile-local generated scripts
+  contain identifiers only. These are workflow records, not another notes store or
+  scheduler. Future inbox records reuse the existing caller store. Use additive,
+  repeatable migrations and preserve linked stores together during upgrades.
 - The handset-reported normalized number selects caller identity and routing; it
   does not authenticate a human. Spoken claims, contact labels, retrieved text,
   and model arguments never grant authority. Keep existing normal approvals.
@@ -162,32 +178,73 @@ an unrelated call. Retain metrics under existing diagnostic retention.
 
 ### TASK-01
 
-**Direct callback and reminder rescheduling.** Add an owner operation
-`hfp_phone_reschedule_callback` taking the exact callback ID, an idempotency
-request ID, the previously read callback revision, and a timezone-aware target
-time. Extend existing callback control and native Hermes reminder management;
-preserve callback/reminder identity and their link. Reject a firing or terminal
-callback and stale revisions without applying an update.
-Coordinate changes with durable operation receipts and read-back reconciliation;
-do not claim a transaction across two independent stores. Serialize reschedule
-against firing/cancellation, and prevent the callback from firing while its
-schedule change is unresolved. If only one side changes, persist both observed
-times and the requested time, expose partial/uncertain state, and require
-reconciliation before firing resumes. Recovery may inspect state and retry a
-provably idempotent schedule update; it must not replay a dial or an uncertain
-notification. An unlinked callback can move, but its missing reminder remains
-visible. Preserve the existing stale-callback firing window.
+**Native call rescheduling.** `hfp_phone_reschedule_callback` is implemented for
+the exact callback ID, stable request ID, current revision, and timezone-aware
+target time. Preserve the pending native `cron_job_id` and callback identity;
+`reminder_job_id` is an alias for that same job, not a separate reminder.
+Serialize changes with cancellation and firing admission. Reject stale revisions
+and non-pending targets. Read back the native schedule before reporting success.
+If a move or read-back fails, retain requested/observed values and hold execution
+until reconciliation. Recovery uses native job identity and durable receipts;
+it never repeats an uncertain dial or report. External cron edits must not bypass
+authorized request state. A missing native job is an unresolved schedule, not an
+unlinked callback that may dial independently. Native Hermes owns catch-up policy;
+the retired daemon five-minute timer is not a requirement.
+
+**Acceptance boundary:** current implementation has automated evidence. Broader
+configuration validation remains a dependency; new-flow live delivery is LIVE-03.
+Historical dual-schedule tests remain historical evidence only.
 
 ### TASK-02
 
-**Verified results and corrections.** After schedule creation or change, read
-the authoritative callback/reminder state and confirm actual date, time, and
-timezone. Expose requested versus effective values, pending/failed/uncertain
-corrections, and separate verification failures from failed writes. For example,
-say that 6 PM remains scheduled when a requested move to 4:30 failed. Status,
-task receipts, spoken guidance, and completion messages use the same outcome
-record. Do not repair historical stranded tasks silently or interpret an accepted
-steer as evidence that the underlying schedule changed.
+**Verified results and corrections.** Read the authoritative native schedule after
+creation or change. Receipts expose requested versus effective time, timezone,
+revision, and failed/pending/uncertain corrections. Compatibility callback/reminder
+time fields describe one job, not independently verified schedules. Separate an
+unverified write from a verified failure. For example, report that 6 PM remains
+scheduled when a requested move to 4:30 failed. Status, task receipts, voice
+guidance, and completion messages must agree. Scheduling acceptance means the job
+was saved, not that the phone objective or delivery completed. Preserve native
+late-steer recovery and do not repair historical stranded tasks implicitly.
+
+### WORKFLOW-01
+
+**Hermes-owned phone objectives and follow-up.** Purpose-bearing
+`hfp_phone_start_call` requests schedule an immediate native one-shot `no_agent`
+job; `hfp_phone_schedule_call` schedules the first attempt for later. Raw
+purpose-free call control is separate. Hermes retains the objective and decides
+what happens after each attempt; the plugin executes only an admitted call and
+returns exact-call evidence. Connection alone cannot establish completion.
+
+Keep original purpose, request date/timezone, deadlines, verified progress, native
+job/run identities, revisions, and operation receipts in profile-scoped records.
+Completion, refusal, and recipient deferral require appropriate evidence; assistant
+speech alone is not completion evidence. Clear refusal closes the request. A
+specific evidenced recipient callback time may defer it. Ambiguity, exhausted
+attempts, missing capabilities, or uncertain/still-active calls require guidance,
+not blind redial. Follow-up decision authority is limited to the exact admitted
+native run; it cannot change recipient, run unrelated actions, or send messages.
+
+Current defaults are three launched attempts total and expiry seven days after the
+first scheduled attempt; an earlier explicit deadline remains earlier on a move.
+Automatic retries use 08:00 inclusive–22:00 exclusive in the requester's timezone,
+with 10-minute then 30-minute default delays and a two-minute minimum. Explicit
+owner timing and evidenced specific recipient times have the documented hours
+exception. Check automatic hours again at actual admission; late native catch-up
+outside them requires guidance. These defaults do not implement recipient-specific
+contact preferences in OFFICE-02.
+
+Cancel prevents future attempts and late decisions, without hanging up an already
+admitted call. Durable native claims and daemon receipts prevent duplicate dialing
+across restart; unresolved edits hold admission. Hermes owns catch-up and native
+report delivery. An uncertain report claim is not republished by the plugin;
+report-only recovery must not repeat the call or decision. Preserve current
+observation limits and authority checks described in the workflow guide.
+
+Legacy terminal callbacks remain history; legacy pending callbacks are held for
+explicit review/migration or cancellation. Do not activate both schedulers or
+recreate an uncertain historical call. Automated and deployed evidence exists;
+new-flow physical-call and Telegram acceptance remains under LIVE-03.
 
 ### TASK-03
 
@@ -201,10 +258,13 @@ otherwise explain that hangup cancels work. An explicit request to wait for
 confirmation prevents an assistant-initiated hangup while confirmation is pending,
 subject to existing call limits. A remote hangup still ends the physical call.
 Tests establish deterministic state behavior; spoken consistency has live gates.
+Implemented workflow briefs also anchor relative dates to the original request
+and preserve verified prior progress. This does not finish the unrelated-memory
+and current-request scenario TASK-03-A1.
 
 ### OWNER-01
 
-**Bounded owner lookup with explicit scope.** Add `owner_call_lookup` for eligible
+**Bounded owner lookup with explicit scope.** Preserve implemented `owner_call_lookup` for eligible
 admin voice sessions and an equivalent owner-chat/delegated path using the same
 authorization service. Read permitted notes, call metadata, retained dialogue,
 and messages once MSG-01 exists. Support normalized number, call ID, date/range,
@@ -214,7 +274,7 @@ Return source caller/profile, call/date, record type, and retrieval outcome.
 Prefer notes for remembered facts and retrieve dialogue for exact wording or
 insufficient/conflicting notes. Never preload all callers into the prompt.
 
-Introduce `phone.owner_access`, keyed by owner endpoint name, with lists of
+Preserve implemented `phone.owner_access`, keyed by owner endpoint name, with lists of
 additional permitted target endpoint names. Default to the bound admin endpoint
 only. Resolve endpoints to authenticated profiles through trusted routing;
 validate references and enforce the originating owner's scope in both daemon
@@ -264,6 +324,10 @@ OWNER-01 and respect deletions in subsequent lookups.
 
 ### REPORT-01
 
+Current groundwork: WORKFLOW-01 produces attempt outcome/decision reports and
+uses native delivery. This is partial progress, not complete discussion handoff;
+all-page finalized retrieval and the richer report below remain unfinished.
+
 **Call reports and finalized transcript handoff.** Extend existing call summaries
 and native delivery with objective, outcome, decisions, requested features,
 examples, constraints, open questions, next actions, memory-save result, and exact
@@ -301,6 +365,10 @@ recurring briefings require a separate owner request.
 
 ### OFFICE-02
 
+Current groundwork: WORKFLOW-01 checks default retry hours in the requester's
+timezone and supports evidenced recipient deferrals. Contact resolution,
+recipient-specific windows/timezones, and structured commitments remain unfinished.
+
 **Commitments, contacts, and calling preferences.** Use existing configured Hermes
 contact/task integrations; provide a documented narrow adapter contract and fake
 adapters for tests, not a bundled provider service. Resolve names, nicknames,
@@ -311,8 +379,10 @@ commitment, reported completion, and verified completion.
 Check configured recipient calling windows in their configured timezone when
 scheduling and immediately before dialing. If a proposed time is outside the
 window, return the next permissible time for explicit selection; do not silently
-move or retry the call. A due callback outside the effective window is recorded
-as blocked without dialing. Missing integrations report unavailable; they never
+move an owner-selected time. Keep this future recipient-preference policy distinct
+from WORKFLOW-01's existing automatic retry hours; contact constraints must be
+checked for any authorized follow-up too. A due call outside the effective
+recipient window is blocked without dialing. Missing integrations report unavailable; they never
 invent contacts or commitments. Contact labels never modify permissions.
 
 ### OFFICE-03
@@ -331,6 +401,11 @@ independently stored message.
 ## Verification and deployment requirements
 
 ### VERIFY-01
+
+The 8 October workflow report records 658 source and installed tests plus native
+compatibility/package checks for that delivery. This is scoped evidence; the
+full office/inbox/migration scenarios below remain pending. Include WORKFLOW-01
+in acceptance and use current native-schedule scenarios, not retired timer tests.
 
 **Automated system acceptance.** Cover the multi-call delivery/RAM scenario:
 distinct callers report details, a later call recalls the correct dated facts,
@@ -378,11 +453,16 @@ uncertain recognition, conflicts, duplicate prevention, and save-failure reporti
 
 ### LIVE-03
 
-**Scheduling and delivery.** Verify schedule, correction, and hangup against the
-effective callback and linked reminder. The old schedule must not also fire.
-Exercise gateway/daemon restart, busy/unanswered/disconnected phones, missed
-windows, partial failures, actual spoken delivery, Telegram receipts, and requests
-to wait for confirmation. Scheduling or voice setup alone does not pass delivery.
+**Native scheduling, outcomes, and delivery.** Verify schedule, correction, and
+hangup against the single native job. The old occurrence must not fire; the
+compatibility reminder ID is the same job. Verify actual conversation, evidenced
+objective completion, and Telegram outcome/decision delivery. Exercise a bounded
+retry after a known missed/busy outcome, specific recipient deferral, refusal with
+no future attempt, cancellation without forced hangup, and preserved progress.
+Include restart, duplicate admission, native catch-up, automatic hours/deadlines,
+partial moves, uncertain outcomes without blind replay, and wait-for-confirmation.
+Map these to manual checks R03–R26. Scheduling or voice setup alone does not pass
+delivery. New-flow live rehearsals remain pending until actually observed.
 
 ### LIVE-04
 
@@ -417,7 +497,11 @@ Copy this prompt when the two handoff files are present in the checkout:
 
 > Implement the remaining system described in `docs/implementation-spec.md`,
 > using `docs/implementation-backlog.yaml` as the progress record. Inspect the
-> current checkout first and preserve existing working behavior. Complete all
+> current checkout first and preserve existing working behavior. Hermes owns the
+> native schedule and follow-up decisions; the plugin executes admitted attempts
+> and returns evidence. Do not restore the retired daemon timer or companion
+> instruction reminder. Reconcile historical evidence with current acceptance
+> before deciding what remains. Complete all
 > implementation and automated verification items in dependency order, add
 > meaningful regression coverage, and update acceptance evidence as work proceeds.
 > Continue independent work when an item is blocked. Do not mark items complete

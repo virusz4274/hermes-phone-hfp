@@ -1,5 +1,7 @@
 # Progress record for docs/implementation-spec.md.
-# Evidence is empty until checks are actually performed against the implementation.
+# Current acceptance is separate from historical_acceptance (superseded definitions/evidence).
+# progress_note describes partial implementation, not a completion override.
+# Reconciled 2026-10-09; the baseline below remains historical.
 schema_version: 1
 spec: "docs/implementation-spec.md"
 baseline:
@@ -233,204 +235,451 @@ items:
         evidence: []
     implementation_refs: []
     blocker: null
-  - id: "TASK-01"
-    title: "Callback and linked reminder rescheduling"
-    kind: "implementation"
+  - id: TASK-01
+    title: Native call rescheduling
+    kind: implementation
     priority: 1
     depends_on:
-      - "QOL-01"
-    status: "in_progress"
-    spec_ref: "docs/implementation-spec.md#task-01"
+    - QOL-01
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#task-01
     source_refs:
-      - path: "TODO.md"
-        item: "Direct reminder rescheduling"
+    - path: TODO.md
+      item: Native call rescheduling
     entry_points:
-      - "src/hfp_mcp/callbacks.py"
-      - "src/hfp_mcp/reminders.py"
-      - "src/hfp_mcp/http_routes.py"
-      - "src/hfp_mcp/hermes_bridge.py"
+    - src/hfp_mcp/phone_workflows.py
+    - src/hfp_mcp/workflow_execution.py
+    - src/hfp_mcp/hermes_bridge.py
+    - tests/test_phone_workflows.py
     requirements:
-      - "Add an idempotent revision-checked reschedule operation with persistent reconciliation receipts."
-      - "Preserve callback/reminder links and prevent firing while schedule coordination is unresolved."
+    - Preserve one native Hermes schedule and callback identity through revision-checked, idempotent rescheduling.
+    - Verify requested versus effective native state; hold admission on unresolved moves and prevent duplicate
+      execution.
+    - Treat reminder_job_id as a cron_job_id alias; native Hermes owns catch-up, and legacy daemon callbacks
+      stay held.
     acceptance:
-      - id: "TASK-01-A1"
-        scenario: "Reschedule a pending linked callback and repeat the same request ID."
-        expected: "Both authoritative times agree, identities/link remain stable, and no duplicate callback or reminder is created."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py"
-      - id: "TASK-01-A2"
-        scenario: "Use a stale revision, collide with cancellation/firing, or reschedule a terminal callback."
-        expected: "Reject safely without unintended changes or a second dial."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py"
-      - id: "TASK-01-A3"
-        scenario: "Fail or time out either schedule update and restart between coordination stages."
-        expected: "Persist requested and observed values with partial/uncertain outcome; unresolved callbacks do not fire; recovery never replays an uncertain call or notification."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py"
-      - id: "TASK-01-A4"
-        scenario: "Reschedule an unlinked callback and advance the clock beyond its firing window."
-        expected: "Missing reminder stays visible; stale callback cannot become a surprise late call."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py"
+    - id: TASK-01-A1
+      scenario: Move a pending native phone job.
+      expected: Callback/native job IDs stay stable, revision advances, read-back matches the target, and
+        the old occurrence cannot fire.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: TASK-01-A2
+      scenario: Use a stale revision, reschedule a firing request, or cancel during a native schedule move.
+      expected: Reject conflicts; cancellation cannot be overwritten and no second attempt is admitted.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: TASK-01-A3
+      scenario: Fail a native move, then reconcile a verified move after reconstructing workflow state.
+      expected: Hold unresolved execution and recover by read-back without repeating a call.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: TASK-01-A4
+      scenario: Remove the native job or inspect a legacy pending daemon callback during upgrade.
+      expected: Missing jobs remain unverified; legacy pending callbacks cannot fire or migrate implicitly.
+        No independent five-minute daemon timer is restored.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: TASK-01-A5
+      scenario: Replay an identical reschedule request, reuse its ID with changed arguments, and move a
+        terminal request.
+      expected: Replay returns the original receipt; changed arguments and terminal targets are rejected
+        without another job or dial.
+      verification: automated
+      status: pending
+      evidence: []
     implementation_refs:
-      - "docs/demo-readiness-2026-10-07.md"
+    - docs/hermes-owner-flow-verification-2026-10-08.md
+    - docs/demo-readiness-2026-10-07.md
     blocker: null
-  - id: "TASK-02"
-    title: "Verified schedule results and unresolved corrections"
-    kind: "implementation"
+    historical_acceptance:
+    - superseded_on: '2026-10-09'
+      reason: Former daemon callback plus companion reminder design; not evidence that replacement native-workflow
+        acceptance passed.
+      checks:
+      - source_acceptance_id: TASK-01-A1
+        scenario: Reschedule a pending linked callback and repeat the same request ID.
+        expected: Both authoritative times agree, identities/link remain stable, and no duplicate callback
+          or reminder is created.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py
+      - source_acceptance_id: TASK-01-A2
+        scenario: Use a stale revision, collide with cancellation/firing, or reschedule a terminal callback.
+        expected: Reject safely without unintended changes or a second dial.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py
+      - source_acceptance_id: TASK-01-A3
+        scenario: Fail or time out either schedule update and restart between coordination stages.
+        expected: Persist requested and observed values with partial/uncertain outcome; unresolved callbacks
+          do not fire; recovery never replays an uncertain call or notification.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py
+      - source_acceptance_id: TASK-01-A4
+        scenario: Reschedule an unlinked callback and advance the clock beyond its firing window.
+        expected: Missing reminder stays visible; stale callback cannot become a surprise late call.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; scripts/check_hermes.py
+    progress_note: Native implementation and scoped deployment exist; QOL-01 and the remaining exact acceptance
+      scenarios prevent item completion. Live delivery is tracked separately in LIVE-03.
+  - id: TASK-02
+    title: Verified schedule results and unresolved corrections
+    kind: implementation
     priority: 1
     depends_on:
-      - "TASK-01"
-    status: "in_progress"
-    spec_ref: "docs/implementation-spec.md#task-02"
+    - TASK-01
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#task-02
     source_refs:
-      - path: "TODO.md"
-        item: "Verify saved details before confirming"
-      - path: "TODO.md"
-        item: "Surface unresolved corrections"
+    - path: TODO.md
+      item: Verified saved details
+    - path: TODO.md
+      item: Unresolved corrections
     entry_points:
-      - "src/hfp_mcp/phone_tasks.py"
-      - "src/hfp_mcp/reminders.py"
-      - "src/hfp_mcp/callbacks.py"
-      - "tests/test_phone_tasks.py"
+    - src/hfp_mcp/phone_tasks.py
+    - src/hfp_mcp/reminders.py
+    - src/hfp_mcp/callbacks.py
+    - tests/test_phone_tasks.py
+    - src/hfp_mcp/phone_workflows.py
     requirements:
-      - "Read back callback/reminder state after creation or change."
-      - "Expose effective versus requested outcomes consistently to status, voice, and completion delivery."
+    - Read back the single authoritative native schedule after creation or change; compatibility callback/reminder
+      time fields describe the same job.
+    - Expose requested/effective time, verification failures, unresolved corrections, and scheduling acceptance
+      separately from objective completion.
     acceptance:
-      - id: "TASK-02-A1"
-        scenario: "Create or reschedule with matching authoritative times."
-        expected: "Confirm saved date, time, and timezone from read-back, not model intent."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py"
-      - id: "TASK-02-A2"
-        scenario: "Request 4:30 while effective schedule remains 6:00 or only one side changes."
-        expected: "Status and receipts explicitly show the mismatch and failed/pending correction; no success claim."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py"
-      - id: "TASK-02-A3"
-        scenario: "Lose a read-back response after a successful write and later reconcile."
-        expected: "Outcome is unverified rather than falsely failed or successful; inspection resolves it without creating another operation."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py"
-      - id: "TASK-02-A4"
-        scenario: "Complete a native run while a late correction is pending."
-        expected: "Preserve logical-task identity and only confirm correction completion after authoritative verification."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py"
+    - id: TASK-02-A1
+      scenario: Create or move a native phone job and inspect its receipt.
+      expected: Read-back verifies the saved time; callback/reminder compatibility fields refer to one native
+        schedule.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: TASK-02-A2
+      scenario: Request 4:30 while the native job remains at 6:00 or its update cannot be verified.
+      expected: Status, task receipts, and reports expose the requested/effective mismatch or uncertainty
+        without claiming a successful move.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: TASK-02-A3
+      scenario: Lose read-back after a successful native write and later reconcile.
+      expected: Retain an unverified outcome until inspection resolves it; do not create a second operation
+        or call.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: TASK-02-A4
+      scenario: Complete a native run while a late correction is pending.
+      expected: Preserve logical-task identity and only confirm correction completion after authoritative
+        verification.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: See scoped demo verification report and referenced regression checks.
+        result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+        tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+        references:
+        - docs/demo-readiness-2026-10-07.md
+        - tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py
     implementation_refs:
-      - "docs/demo-readiness-2026-10-07.md"
+    - docs/hermes-owner-flow-verification-2026-10-08.md
+    - docs/demo-readiness-2026-10-07.md
     blocker: null
-  - id: "TASK-03"
-    title: "Current intent and hangup handling"
-    kind: "implementation"
+    historical_acceptance:
+    - superseded_on: '2026-10-09'
+      reason: Former daemon callback plus companion reminder design; not evidence that replacement native-workflow
+        acceptance passed.
+      checks:
+      - source_acceptance_id: TASK-02-A1
+        scenario: Create or reschedule with matching authoritative times.
+        expected: Confirm saved date, time, and timezone from read-back, not model intent.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py
+      - source_acceptance_id: TASK-02-A2
+        scenario: Request 4:30 while effective schedule remains 6:00 or only one side changes.
+        expected: Status and receipts explicitly show the mismatch and failed/pending correction; no success
+          claim.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py
+      - source_acceptance_id: TASK-02-A3
+        scenario: Lose a read-back response after a successful write and later reconcile.
+        expected: Outcome is unverified rather than falsely failed or successful; inspection resolves it
+          without creating another operation.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - tests/test_callback_rescheduling.py; tests/test_reminders.py; tests/test_phone_tasks.py
+    progress_note: Current schedule receipts and outcome reports are implemented. Exact cross-surface failure/read-back
+      scenarios remain pending rather than inheriting former two-schedule passes.
+  - id: WORKFLOW-01
+    title: Hermes-owned phone objectives and bounded follow-up
+    kind: implementation
     priority: 1
     depends_on:
-      - "TASK-02"
-    status: "in_progress"
-    spec_ref: "docs/implementation-spec.md#task-03"
+    - TASK-01
+    - TASK-02
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#workflow-01
     source_refs:
-      - path: "TODO.md"
-        item: "Clear hangup handling for unfinished work"
-      - path: "TODO.md"
-        item: "Preserve the current request over unrelated memory"
+    - path: TODO.md
+      item: Phone objectives and follow-up
     entry_points:
-      - "src/hfp_mcp/phone_tasks.py"
-      - "src/hfp_mcp/phone_controller.py"
-      - "src/hfp_mcp/gemini_live.py"
+    - src/hfp_mcp/phone_workflows.py
+    - src/hfp_mcp/phone_workflow_runner.py
+    - src/hfp_mcp/workflow_execution.py
+    - tests/test_phone_workflows.py
+    - tests/test_workflow_execution.py
     requirements:
-      - "Preserve current request and corrections through native task steering."
-      - "Respect caller wait-for-confirmation instructions and existing continuation/cancellation limits."
+    - Hermes owns native schedules and follow-up decisions; the plugin executes admitted calls and returns
+      exact-call evidence.
+    - Keep original objective/date, narrow authority, durable attempts, verified progress, native identities,
+      and report claims across restarts.
+    - Use three attempts total, seven-day expiry from the first scheduled attempt, earlier explicit deadlines,
+      and 08:00–22:00 automatic retry hours in the requester timezone. Default retry delays are 10 then
+      30 minutes, minimum two minutes; explicit owner timing and evidenced recipient times have the documented
+      hours exception.
+    - Require evidence for completion/refusal/deferral; uncertain or still-active calls, ambiguity, exhausted
+      attempts and missing capabilities require guidance.
+    - Cancellation prevents future attempts and late decisions without hanging up an admitted call. Native
+      delivery owns report receipts/retry policy; the plugin never republishes an uncertain report claim.
     acceptance:
-      - id: "TASK-03-A1"
-        scenario: "Submit a new request with unrelated old notes and a subsequent correction."
-        expected: "Task labels, actual delegated arguments, and acknowledgement data follow the new request and same logical task."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "TASK-03-A2"
-        scenario: "Hang up with authorized continuation, without continuation, or while an explicit wait-for-confirmation instruction is active."
-        expected: "Task state follows policy; assistant does not voluntarily end early while waiting within call limits; remote hangup still ends physical call."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_phone_tasks.py; tests/test_phone_conversations.py; tests/test_phone_controls.py"
-      - id: "TASK-03-A3"
-        scenario: "Race correction completion with cancellation, deadline expiry, restart, and approval."
-        expected: "Existing deadlines/grants are preserved; no replay, duplicate completion, or unauthorized work."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "tests/test_phone_tasks.py; tests/test_phone_conversations.py; tests/test_phone_controls.py"
+    - id: WORKFLOW-01-A1
+      scenario: Create/replay a native request, lose its creation response, repeat execution, and recover
+        a missing dial receipt.
+      expected: One job/attempt identity survives; duplicate or uncertain execution never redials.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+        - tests/test_workflow_execution.py
+    - id: WORKFLOW-01-A2
+      scenario: Supply connection-only or assistant-only completion claims, valid caller evidence, a refusal,
+        and recipient deferral.
+      expected: Reject unsupported completion; evidenced completion/refusal closes the request and specific
+        evidenced deferral schedules the exact time.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: WORKFLOW-01-A3
+      scenario: Exercise retry delays, actual catch-up hours at 07/08/21/22, deadlines, and exhausted attempts.
+      expected: Respect default windows and limits, verify the next native job, and require guidance when
+        admission is outside hours or attempts are exhausted.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: WORKFLOW-01-A4
+      scenario: Cancel an active request; try expired/guest authority, a wrong call/run, cross-profile access,
+        and revoked report authority.
+      expected: No late decision/future attempt, no forced hangup, no caller binding revival or cross-profile
+        disclosure.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: WORKFLOW-01-A5
+      scenario: Run a synthetic missed-call decision/report and repeat report retrieval; generate a later
+        attempt brief.
+      expected: Publish one report claim with a verified next schedule; original request date and verified
+        progress remain in later briefs.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+          regressions only, no live calls or messages.
+        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_phone_workflows.py
+    - id: WORKFLOW-01-A6
+      scenario: Exercise missing native capabilities, model/observation timeouts, report-only recovery after
+        a dead worker, and legacy pending-job upgrade.
+      expected: Require guidance or safe report-only recovery without redial/decision replay; hold legacy
+        pending calls and retain terminal history. Record complete scenario-specific automated evidence.
+      verification: automated
+      status: pending
+      evidence: []
     implementation_refs:
-      - "docs/demo-readiness-2026-10-07.md"
+    - docs/hermes-owner-flow-verification-2026-10-08.md
+    - docs/hermes-call-workflows.md
+    progress_note: Implemented and installed per the dated report. Scoped tests rerun during documentation
+      reconciliation; broader prerequisite and acceptance coverage remains open. No new-flow live acceptance
+      has been performed.
     blocker: null
+  - id: TASK-03
+    title: Current intent and hangup handling
+    kind: implementation
+    priority: 1
+    depends_on:
+    - TASK-02
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#task-03
+    source_refs:
+    - path: TODO.md
+      item: Clear hangup handling for unfinished work
+    - path: TODO.md
+      item: Preserve the current request over unrelated memory
+    entry_points:
+    - src/hfp_mcp/phone_tasks.py
+    - src/hfp_mcp/phone_controller.py
+    - src/hfp_mcp/gemini_live.py
+    requirements:
+    - Preserve current request and corrections through native task steering.
+    - Respect caller wait-for-confirmation instructions and existing continuation/cancellation limits.
+    acceptance:
+    - id: TASK-03-A1
+      scenario: Submit a new request with unrelated old notes and a subsequent correction.
+      expected: Task labels, actual delegated arguments, and acknowledgement data follow the new request
+        and same logical task.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: TASK-03-A2
+      scenario: Hang up with authorized continuation, without continuation, or while an explicit wait-for-confirmation
+        instruction is active.
+      expected: Task state follows policy; assistant does not voluntarily end early while waiting within
+        call limits; remote hangup still ends physical call.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: See scoped demo verification report and referenced regression checks.
+        result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+        tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+        references:
+        - docs/demo-readiness-2026-10-07.md
+        - tests/test_phone_tasks.py; tests/test_phone_conversations.py
+    - id: TASK-03-A3
+      scenario: Race correction completion with cancellation, deadline expiry, restart, and approval.
+      expected: Existing deadlines/grants are preserved; no replay, duplicate completion, or unauthorized
+        work.
+      verification: automated
+      status: passed
+      evidence:
+      - command_or_procedure: See scoped demo verification report and referenced regression checks.
+        result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+        tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+        references:
+        - docs/demo-readiness-2026-10-07.md
+        - tests/test_phone_tasks.py; tests/test_phone_conversations.py
+    implementation_refs:
+    - docs/hermes-owner-flow-verification-2026-10-08.md
+    - docs/demo-readiness-2026-10-07.md
+    blocker: null
+    progress_note: Workflow briefs retain original request dates and verified prior progress. This is additional
+      groundwork; unrelated-memory TASK-03-A1 remains pending.
   - id: "OWNER-01"
     title: "Scoped owner lookup"
     kind: "implementation"
@@ -441,17 +690,17 @@ items:
     spec_ref: "docs/implementation-spec.md#owner-01"
     source_refs:
       - path: "TODO.md"
-        item: "Read-only owner lookup during admin calls"
+        item: "Read-only owner lookup"
       - path: "TODO.md"
-        item: "Useful, bounded lookup results"
+        item: "Bounded lookup results"
       - path: "TODO.md"
-        item: "Implement owner lookup first"
+        item: "Reuse implemented lookup"
       - path: "TODO.md"
-        item: "Define owner scope across guest profiles explicitly"
+        item: "Preserve directional owner scope"
       - path: "TODO.md"
-        item: "Enforce authorization beyond tool visibility"
+        item: "Authorization beyond visibility"
       - path: "TODO.md"
-        item: "Test route changes and asynchronous result isolation"
+        item: "Asynchronous isolation"
     entry_points:
       - "src/hfp_mcp/hermes_bridge.py"
       - "src/hfp_mcp/server.py"
@@ -626,55 +875,63 @@ items:
         evidence: []
     implementation_refs: []
     blocker: null
-  - id: "REPORT-01"
-    title: "Call reports and complete transcript handoff"
-    kind: "implementation"
+  - id: REPORT-01
+    title: Call reports and complete transcript handoff
+    kind: implementation
     priority: 3
     depends_on:
-      - "OWNER-01"
-      - "TASK-03"
-    status: "pending"
-    spec_ref: "docs/implementation-spec.md#report-01"
+    - OWNER-01
+    - TASK-03
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#report-01
     source_refs:
-      - path: "TODO.md"
-        item: "Detailed follow-up and final transcript handoff"
-      - path: "TODO.md"
-        item: "Owner call report"
+    - path: TODO.md
+      item: Detailed follow-up and final transcript handoff
+    - path: TODO.md
+      item: Owner call report
     entry_points:
-      - "src/hfp_mcp/phone_tasks.py"
-      - "src/hfp_mcp/phone_conversation.py"
-      - "src/hfp_mcp/conversations.py"
-      - "src/hfp_mcp/hermes_bridge.py"
+    - src/hfp_mcp/phone_tasks.py
+    - src/hfp_mcp/phone_conversation.py
+    - src/hfp_mcp/conversations.py
+    - src/hfp_mcp/hermes_bridge.py
     requirements:
-      - "Produce source-linked reports with objectives, constraints, decisions, next actions, and save outcomes."
-      - "Retrieve all authorized finalized transcript pages when explicitly requested and use native delivery."
+    - Produce source-linked reports with objectives, constraints, decisions, next actions, and save outcomes.
+    - Retrieve all authorized finalized transcript pages when explicitly requested and use native delivery.
     acceptance:
-      - id: "REPORT-01-A1"
-        scenario: "Request a whole-discussion follow-up from a long call with several transcript pages."
-        expected: "Include material requested details/examples/constraints and source call; process every page with bounded reads and explicit finalization state."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "REPORT-01-A2"
-        scenario: "Disable retention, expire history, interrupt finalization, or deny source-call authority."
-        expected: "Report unavailable or partial history accurately; no unauthorized fetch or invented full transcript."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "REPORT-01-A3"
-        scenario: "Ask to send now after hangup, then simulate delivery success, failure, uncertainty, and restart."
-        expected: "Use existing authorized native task/delivery path; no reminder-time question or unconfirmed delivered claim; no duplicate uncertain send."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "REPORT-01-A4"
-        scenario: "Embed instructions for unrelated actions in retrieved dialogue."
-        expected: "Summarize as data without executing those actions; preserve original authorized handoff scope."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-    implementation_refs: []
+    - id: REPORT-01-A1
+      scenario: Request a whole-discussion follow-up from a long call with several transcript pages.
+      expected: Include material requested details/examples/constraints and source call; process every page
+        with bounded reads and explicit finalization state.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: REPORT-01-A2
+      scenario: Disable retention, expire history, interrupt finalization, or deny source-call authority.
+      expected: Report unavailable or partial history accurately; no unauthorized fetch or invented full
+        transcript.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: REPORT-01-A3
+      scenario: Ask to send now after hangup, then simulate delivery success, failure, uncertainty, and
+        restart.
+      expected: Use existing authorized native task/delivery path; no reminder-time question or unconfirmed
+        delivered claim; no duplicate uncertain send.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: REPORT-01-A4
+      scenario: Embed instructions for unrelated actions in retrieved dialogue.
+      expected: Summarize as data without executing those actions; preserve original authorized handoff
+        scope.
+      verification: automated
+      status: pending
+      evidence: []
+    implementation_refs:
+    - docs/hermes-owner-flow-verification-2026-10-08.md
     blocker: null
+    progress_note: Attempt outcome/decision reports and native delivery exist. Full finalized transcript
+      handoff, report completeness, and all existing acceptance checks remain pending.
   - id: "VOICE-01"
     title: "Accurate runtime and conversational claims"
     kind: "implementation"
@@ -723,55 +980,64 @@ items:
     implementation_refs:
       - "docs/demo-readiness-2026-10-07.md"
     blocker: null
-  - id: "OFFICE-02"
-    title: "Commitments contacts and calling preferences"
-    kind: "implementation"
+  - id: OFFICE-02
+    title: Commitments contacts and calling preferences
+    kind: implementation
     priority: 3
     depends_on:
-      - "OWNER-01"
-      - "TASK-01"
-    status: "pending"
-    spec_ref: "docs/implementation-spec.md#office-02"
+    - OWNER-01
+    - TASK-01
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#office-02
     source_refs:
-      - path: "TODO.md"
-        item: "Commitments and outstanding work"
-      - path: "TODO.md"
-        item: "Contact names and calling preferences"
+    - path: TODO.md
+      item: Commitments and outstanding work
+    - path: TODO.md
+      item: Contact names and calling preferences
     entry_points:
-      - "src/hfp_mcp/hermes_bridge.py"
-      - "src/hfp_mcp/callbacks.py"
-      - "src/hfp_mcp/contracts.py"
-      - "docs/phone-routing.md"
+    - src/hfp_mcp/hermes_bridge.py
+    - src/hfp_mcp/callbacks.py
+    - src/hfp_mcp/contracts.py
+    - docs/phone-routing.md
     requirements:
-      - "Use narrow adapters to existing configured contact/task integrations and fake implementations in tests."
-      - "Enforce contact disambiguation, task provenance, and timezone-aware calling windows without implicit rescheduling."
+    - Use narrow adapters to existing configured contact/task integrations and fake implementations in tests.
+    - Enforce contact disambiguation, task provenance, and timezone-aware calling windows without implicit
+      rescheduling.
     acceptance:
-      - id: "OFFICE-02-A1"
-        scenario: "Resolve aliases yielding one number, several candidates, or no configured integration."
-        expected: "Normalize the unique destination; clarify ambiguous results; report unavailable without inventing contacts or granting permissions."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "OFFICE-02-A2"
-        scenario: "Record a fact, an intention, an agreed commitment, and reported versus verified completion."
-        expected: "Records preserve distinctions and source metadata; no task is created merely by saving notes."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "OFFICE-02-A3"
-        scenario: "Schedule outside a recipient window, cross a timezone/DST boundary, and change preferences before the due call."
-        expected: "Offer an explicit permissible time without moving silently; recheck before dial and record blocked if no longer allowed; no redial."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "OFFICE-02-A4"
-        scenario: "A restricted caller tries to read another contact or mutate another person's commitment."
-        expected: "Caller-aware integration ownership and normal approvals remain enforced; external receipt identifies the actual result."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-    implementation_refs: []
+    - id: OFFICE-02-A1
+      scenario: Resolve aliases yielding one number, several candidates, or no configured integration.
+      expected: Normalize the unique destination; clarify ambiguous results; report unavailable without
+        inventing contacts or granting permissions.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: OFFICE-02-A2
+      scenario: Record a fact, an intention, an agreed commitment, and reported versus verified completion.
+      expected: Records preserve distinctions and source metadata; no task is created merely by saving notes.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: OFFICE-02-A3
+      scenario: Schedule outside a recipient window, cross a timezone/DST boundary, and change preferences
+        before the due call.
+      expected: Offer an explicit permissible time for recipient preferences; recheck before dialing and
+        block if no longer allowed. Keep this future preference policy distinct from WORKFLOW-01 automatic
+        retry hours and apply it to authorized follow-ups too.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: OFFICE-02-A4
+      scenario: A restricted caller tries to read another contact or mutate another person's commitment.
+      expected: Caller-aware integration ownership and normal approvals remain enforced; external receipt
+        identifies the actual result.
+      verification: automated
+      status: pending
+      evidence: []
+    implementation_refs:
+    - docs/hermes-owner-flow-verification-2026-10-08.md
     blocker: null
+    progress_note: Default automatic retry-hour checks and recipient deferral exist in WORKFLOW-01. Contacts,
+      recipient-specific windows/timezones and structured commitments remain pending.
   - id: "OFFICE-03"
     title: "Receptionist meetings and escalation"
     kind: "implementation"
@@ -855,89 +1121,140 @@ items:
         evidence: []
     implementation_refs: []
     blocker: null
-  - id: "VERIFY-01"
-    title: "Automated system and compatibility acceptance"
-    kind: "automated_verification"
+  - id: VERIFY-01
+    title: Automated system and compatibility acceptance
+    kind: automated_verification
     priority: 4
     depends_on:
-      - "QOL-01"
-      - "QOL-02"
-      - "OPS-01"
-      - "OPS-02"
-      - "OPS-03"
-      - "TASK-01"
-      - "TASK-02"
-      - "TASK-03"
-      - "OWNER-01"
-      - "OWNER-02"
-      - "MSG-01"
-      - "REPORT-01"
-      - "VOICE-01"
-      - "OFFICE-02"
-      - "OFFICE-03"
-      - "OFFICE-01"
-    status: "in_progress"
-    spec_ref: "docs/implementation-spec.md#verify-01"
+    - QOL-01
+    - QOL-02
+    - OPS-01
+    - OPS-02
+    - OPS-03
+    - TASK-01
+    - TASK-02
+    - TASK-03
+    - OWNER-01
+    - OWNER-02
+    - MSG-01
+    - REPORT-01
+    - VOICE-01
+    - OFFICE-02
+    - OFFICE-03
+    - OFFICE-01
+    - WORKFLOW-01
+    status: in_progress
+    spec_ref: docs/implementation-spec.md#verify-01
     source_refs:
-      - path: "TODO.md"
-        item: "Test route changes and asynchronous result isolation"
-      - path: "TODO.md"
-        item: "End-to-end office scenario"
+    - path: TODO.md
+      item: Asynchronous isolation
+    - path: TODO.md
+      item: End-to-end office scenario
     entry_points:
-      - "tests"
-      - "scripts/check_hermes.py"
-      - "scripts/check_artifacts.py"
-      - "scripts/smoke_packages.py"
-      - "docs/release.md"
+    - tests
+    - scripts/check_hermes.py
+    - scripts/check_artifacts.py
+    - scripts/smoke_packages.py
+    - docs/release.md
     requirements:
-      - "Verify integrated behavior and all shared invariants with synthetic callers and fake external services."
-      - "Pass required full-suite, packaging, migration, and isolated real-Hermes checks; update public documentation."
+    - Verify integrated behavior and all shared invariants with synthetic callers and fake external services.
+    - Pass required full-suite, packaging, migration, and isolated real-Hermes checks; update public documentation.
     acceptance:
-      - id: "VERIFY-01-A1"
-        scenario: "Run successive delivery/RAM calls, later recall, owner review/correction, and a scheduled follow-up."
-        expected: "Persisted facts, messages, task/calendar receipts, fresh context, and call objectives are correct and isolated."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "VERIFY-01-A2"
-        scenario: "Exercise restart, duplicates, concurrent edits, denied direct/delegated tools, route switches, late results, expiry, and abrupt hangup."
-        expected: "No private-context leak, restored forgotten fact, unauthorized action, duplicate dial, or uncertain-delivery replay."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "VERIFY-01-A3"
-        scenario: "Upgrade fixtures from the current data schema and test disabled/unavailable optional capabilities."
-        expected: "Preserve existing notes/call IDs/task links; older peers fail new capabilities explicitly without regression."
-        verification: "automated"
-        status: "pending"
-        evidence: []
-      - id: "VERIFY-01-A4"
-        scenario: "Run targeted checks, full pytest suite, relevant shell/package/artifact smoke checks, and isolated real-Hermes compatibility script."
-        expected: "All required checks pass on the implementation revision; unavailable Hermes verification is recorded as blocked, not passed."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "docs/demo-readiness-2026-10-07.md"
-      - id: "VERIFY-01-A5"
-        scenario: "Review new CLI/API/configuration, retention, migration, compatibility, and upgrade documentation."
-        expected: "Examples and behavior agree; portable package imports remain independent of native daemon bindings; docs do not imply live verification."
-        verification: "automated"
-        status: "passed"
-        evidence:
-          - command_or_procedure: "See scoped demo verification report and referenced regression checks."
-            result: "Passed for this delivery scope; broader dependencies and live acceptance remain pending."
-            tested_revision: "Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77"
-            references:
-              - "docs/demo-readiness-2026-10-07.md"
-              - "docs/demo-readiness-2026-10-07.md"
+    - id: VERIFY-01-A1
+      scenario: Run successive delivery/RAM calls, later recall, owner review/correction, and a scheduled
+        follow-up.
+      expected: Persisted facts, messages, task/calendar receipts, fresh context, and call objectives are
+        correct and isolated.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: VERIFY-01-A2
+      scenario: Exercise restart, duplicates, concurrent edits, denied direct/delegated tools, route switches,
+        late results, expiry, and abrupt hangup.
+      expected: No private-context leak, restored forgotten fact, unauthorized action, duplicate dial, or
+        uncertain-delivery replay.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: VERIFY-01-A3
+      scenario: Upgrade fixtures from the current data schema and test disabled/unavailable optional capabilities.
+      expected: Preserve existing notes/call IDs/task links; older peers fail new capabilities explicitly
+        without regression.
+      verification: automated
+      status: pending
+      evidence: []
+    - id: VERIFY-01-A4
+      scenario: Run targeted checks, full pytest suite, relevant shell/package/artifact smoke checks, and
+        isolated real-Hermes compatibility script.
+      expected: All required checks pass on the implementation revision; unavailable Hermes verification
+        is recorded as blocked, not passed.
+      verification: automated
+      status: pending
+      evidence:
+      - command_or_procedure: Read the dated 8 October verification report and its 9 October documentation
+          addendum.
+        result: 'Partial evidence: 658 source/installed tests and native/package checks were reported for
+          the 8 October workflow; 61 scoped regressions and documentation checks were run on 9 October.
+          Full future-scope acceptance remains pending.'
+        tested_revision: 8 October workflow wheel 91b9a8ba453b82c42cca5e1e6f0ec6e4379d196026560ae678fa1a71949bb7d8;
+          9 October source working tree based on 1d3a405
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
+    - id: VERIFY-01-A5
+      scenario: Review new CLI/API/configuration, retention, migration, compatibility, and upgrade documentation.
+      expected: Examples and behavior agree; portable package imports remain independent of native daemon
+        bindings; docs do not imply live verification.
+      verification: automated
+      status: pending
+      evidence:
+      - command_or_procedure: Read the dated 8 October verification report and its 9 October documentation
+          addendum.
+        result: 'Partial evidence: 658 source/installed tests and native/package checks were reported for
+          the 8 October workflow; 61 scoped regressions and documentation checks were run on 9 October.
+          Full future-scope acceptance remains pending.'
+        tested_revision: 8 October workflow wheel 91b9a8ba453b82c42cca5e1e6f0ec6e4379d196026560ae678fa1a71949bb7d8;
+          9 October source working tree based on 1d3a405
+        references:
+        - docs/hermes-owner-flow-verification-2026-10-08.md
     implementation_refs:
-      - "docs/demo-readiness-2026-10-07.md"
+    - docs/demo-readiness-2026-10-07.md
+    - docs/hermes-owner-flow-verification-2026-10-08.md
     blocker: null
+    progress_note: The 8 October report records 658 source/installed tests and native/package checks for
+      the scoped workflow. The 9 October documentation audit reran 61 targeted tests only; full office acceptance
+      is still pending.
+    historical_acceptance:
+    - superseded_on: '2026-10-09'
+      reason: Scoped delivery passes are retained as history; they do not complete verification of the expanded
+        implementation requirements.
+      checks:
+      - source_acceptance_id: VERIFY-01-A4
+        scenario: Run targeted checks, full pytest suite, relevant shell/package/artifact smoke checks,
+          and isolated real-Hermes compatibility script.
+        expected: All required checks pass on the implementation revision; unavailable Hermes verification
+          is recorded as blocked, not passed.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - docs/demo-readiness-2026-10-07.md
+      - source_acceptance_id: VERIFY-01-A5
+        scenario: Review new CLI/API/configuration, retention, migration, compatibility, and upgrade documentation.
+        expected: Examples and behavior agree; portable package imports remain independent of native daemon
+          bindings; docs do not imply live verification.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: See scoped demo verification report and referenced regression checks.
+          result: Passed for this delivery scope; broader dependencies and live acceptance remain pending.
+          tested_revision: Working-tree wheel SHA-256 6ae707917d1c71fbe4923a36463f157029323b4e76c5998ec5904175b2746a77
+          references:
+          - docs/demo-readiness-2026-10-07.md
+          - docs/demo-readiness-2026-10-07.md
   - id: "DEPLOY-01"
     title: "Coordinated deployment verification"
     kind: "deployment"
@@ -948,7 +1265,7 @@ items:
     spec_ref: "docs/implementation-spec.md#deploy-01"
     source_refs:
       - path: "TODO.md"
-        item: "Deploy the tested local patch to both runtimes and restart after active"
+        item: "The scoped late-correction"
     entry_points:
       - "docs/maintenance.md"
       - "docs/install.md"
@@ -1084,50 +1401,93 @@ items:
         evidence: []
     implementation_refs: []
     blocker: null
-  - id: "LIVE-03"
-    title: "Live scheduling correction and delivery acceptance"
-    kind: "live_acceptance"
+  - id: LIVE-03
+    title: Live scheduling correction and delivery acceptance
+    kind: live_acceptance
     priority: 5
     depends_on:
-      - "DEPLOY-01"
-    status: "pending"
-    spec_ref: "docs/implementation-spec.md#live-03"
+    - DEPLOY-01
+    - WORKFLOW-01
+    status: pending
+    spec_ref: docs/implementation-spec.md#live-03
     source_refs:
-      - path: "TODO.md"
-        item: "Run a live schedule -> time correction -> hangup test. Confirm the saved"
-      - path: "TODO.md"
-        item: "Verify scheduled callback voice delivery and linked Telegram delivery after"
+    - path: TODO.md
+      item: Run schedule -> time correction
+    - path: TODO.md
+      item: Verify native scheduled-call voice delivery and Telegram outcome reporting after
     entry_points:
-      - "docs/phone-routing.md"
-      - "docs/compatibility.md"
+    - docs/phone-routing.md
+    - docs/compatibility.md
     requirements:
-      - "Verify actual callback voice and native Telegram delivery, not only scheduling or voice setup."
+    - Verify physical call objectives, native schedule changes/follow-ups, and Telegram outcome reports;
+      scheduling acceptance alone is not delivery.
     acceptance:
-      - id: "LIVE-03-A1"
-        scenario: "Schedule, correct the time, and hang up; inspect effective callback/reminder and wait for the authorized delivery."
-        expected: "Saved times, spoken confirmation, completion notice, and actual delivery agree; original schedule does not also fire."
-        verification: "live"
-        status: "pending"
-        evidence:
-          - command_or_procedure: "User confirms callback receipt but needs to say hello; implement the selected cached spoken outgoing opening and deploy tested wheel."
-            result: "Prior outgoing audit at 12:41:36 IST lasted 18.26 seconds. Cached opening implementation passes 614 tests and is deployed in both environments. Live cached-opening delivery, schedule correction and Telegram confirmation remain pending."
-            tested_revision: "Working-tree wheel SHA-256 946f1fee1be8d5ca0cde55814e8935a41f1636cb26f041750abb9d640bfa51a8"
-            references:
-              - "docs/cached-outgoing-opening-2026-10-08.md"
-      - id: "LIVE-03-A2"
-        scenario: "Restart gateway/daemon and exercise busy, unanswered, disconnected, missed-window, and partial-failure scenarios."
-        expected: "Visible effective outcomes, no surprise late/duplicate calls, and no unconfirmed delivery claims."
-        verification: "live"
-        status: "pending"
-        evidence: []
-      - id: "LIVE-03-A3"
-        scenario: "Ask the assistant to wait for confirmation before ending the call."
-        expected: "It respects the instruction within existing limits and explains continuation/cancellation accurately."
-        verification: "live"
-        status: "pending"
-        evidence: []
+    - id: LIVE-03-A1
+      scenario: Schedule, correct the time, and hang up; inspect the single native job and observe the actual
+        call and Telegram outcome report.
+      expected: The old occurrence does not fire; saved time, spoken outcome and report agree. reminder_job_id
+        aliases cron_job_id, not a companion message.
+      verification: live
+      status: pending
+      evidence: []
+    - id: LIVE-03-A2
+      scenario: Exercise native restart/catch-up, busy/unanswered outcomes, partial moves, hours/deadlines,
+        and uncertainty.
+      expected: Known outcomes permit only bounded authorized follow-ups; uncertain outcomes never trigger
+        blind retry, duplicate dialing or false delivery claims.
+      verification: live
+      status: pending
+      evidence: []
+    - id: LIVE-03-A3
+      scenario: Ask the assistant to wait for confirmation before ending the call.
+      expected: It respects the instruction within existing limits and explains continuation/cancellation
+        accurately.
+      verification: live
+      status: pending
+      evidence: []
+    - id: LIVE-03-A4
+      scenario: Observe evidenced completion, a missed-call retry, specific recipient deferral, refusal,
+        cancellation and later progress recall (manual R19–R26).
+      expected: Actual calls and Telegram decisions match evidence and limits; cancellation stops future
+        attempts without forcing hangup.
+      verification: live
+      status: pending
+      evidence: []
     implementation_refs: []
     blocker: null
+    historical_acceptance:
+    - superseded_on: '2026-10-09'
+      reason: Former daemon callback plus companion reminder design; not evidence that replacement native-workflow
+        acceptance passed.
+      checks:
+      - source_acceptance_id: LIVE-03-A1
+        scenario: Schedule, correct the time, and hang up; inspect effective callback/reminder and wait
+          for the authorized delivery.
+        expected: Saved times, spoken confirmation, completion notice, and actual delivery agree; original
+          schedule does not also fire.
+        verification: live
+        status: pending
+        evidence:
+        - command_or_procedure: User confirms callback receipt but needs to say hello; implement the selected
+            cached spoken outgoing opening and deploy tested wheel.
+          result: Prior outgoing audit at 12:41:36 IST lasted 18.26 seconds. Cached opening implementation
+            passes 614 tests and is deployed in both environments. Live cached-opening delivery, schedule
+            correction and Telegram confirmation remain pending.
+          tested_revision: Working-tree wheel SHA-256 946f1fee1be8d5ca0cde55814e8935a41f1636cb26f041750abb9d640bfa51a8
+          references:
+          - docs/cached-outgoing-opening-2026-10-08.md
+    - superseded_on: '2026-10-09'
+      reason: Former daemon callback plus companion reminder design; not evidence that replacement native-workflow
+        acceptance passed.
+      checks:
+      - source_acceptance_id: LIVE-03-A2
+        scenario: Restart gateway/daemon and exercise busy, unanswered, disconnected, missed-window, and
+          partial-failure scenarios.
+        expected: Visible effective outcomes, no surprise late/duplicate calls, and no unconfirmed delivery
+          claims.
+        verification: live
+        status: pending
+        evidence: []
   - id: "LIVE-04"
     title: "Live office scenario and compatibility evidence"
     kind: "live_acceptance"

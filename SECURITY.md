@@ -54,3 +54,31 @@ Notes and dialogue remain untrusted input to a tools-disabled extraction model.
 Checkpoint credentials stay in the private daemon ledger and are never included
 in voice context or public status. Forgetting notes removes pending gateway
 checkpoints and their credentials, so recovery cannot restore forgotten facts.
+
+## Phone workflow authority and records
+
+Hermes owns native call schedules, bounded follow-up decisions, and delivery.
+The plugin checks current routing and narrow request authority before executing
+an attempt and before releasing its result. A scheduled request does not revive
+an expired caller binding. The outcome-decision tool is limited to the exact
+admitted native run; recipient speech and retained evidence do not authorize
+unrelated tools, arbitrary recipients, or messages. Cancellation prevents future
+attempts; active-call hangup remains separate.
+
+Each profile's private `hfp-phone/workflows.sqlite3` stores purposes, deadlines,
+authority, attempt evidence, decisions, and report claims. The daemon's `calls.db`
+contains `phone_workflow_execution` receipts. Native Hermes stores cron execution
+and decision-session records separately. Generated mode-0600 scripts in the
+profile's `scripts/` directory contain workflow identifiers, not credentials or
+transcripts. Protect all of these and their backups as private data.
+
+Workflow pruning runs on gateway startup after the configured retention interval
+(default 30 days) beyond the request deadline, provided no attempt is still
+admitted, observing, or deciding. Daemon execution receipts follow diagnostic
+retention from their start time. Native cron/session stores have their own
+policies; generated scripts and backups need operator cleanup. Transcript
+excerpts are collected only when full transcript retention is enabled. Forgetting
+caller notes does not delete workflow evidence, native sessions/jobs, generated
+scripts, or backups. Do not remove linked state while attempts or report workers
+are active. See [workflow lifecycle](docs/hermes-call-workflows.md) and
+[maintenance](docs/maintenance.md) for coordinated backup/removal.

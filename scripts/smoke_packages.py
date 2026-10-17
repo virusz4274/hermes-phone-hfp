@@ -57,6 +57,7 @@ def main():
                     "-c",
                     """import importlib.util
 import hfp_mcp.hermes_bridge, hfp_mcp.phone_tasks, hfp_mcp.hermes_sessions
+import hfp_mcp.phone_workflows, hfp_mcp.phone_workflow_runner, hfp_mcp.workflow_execution
 from hfp_mcp.audio.opening import outgoing_opening
 assert outgoing_opening().text == 'Hello, this is Hermes, an AI assistant.'
 assert outgoing_opening().pcm

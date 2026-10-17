@@ -1,12 +1,13 @@
 # Hermes Phone manual feature checklist
 
 Use this for rehearsal and for choosing scenes in your plugin video. A spoken
-promise is not a pass: check the saved notes, actual task result, both schedules,
+promise is not a pass: check the saved notes, actual task result, the native schedule and final outcome,
 or delivery receipt where the item asks for it. Start every item as Pending and
 record Pass, Fail, Not configured, or Skipped, with a short note.
 
-The current machine has Gemini, admin routes, caller memory, continuity,
-background tasks, transcripts and Telegram configured. Guest routes are optional;
+The 8 October deployment report recorded Gemini, admin routes, caller memory,
+continuity, background tasks, transcripts and Telegram configured. Recheck the
+actual configuration before each rehearsal. Guest routes are optional;
 their absence is Not configured, not a plugin failure. Calendar and business
 actions require their own Hermes integrations. Classic STT/TTS and call recording
 remain outside this rehearsal. Text transcripts are included.
@@ -40,7 +41,7 @@ per call; callback waits and service-recovery checks can be separate clips.
 4. Say “Remember that my demo drink is lemon tea.” Read the saved note afterward.
 5. Share a separate disposable fact naturally, hang up, and show its automatic memory-save outcome.
 6. Call again. Ask about the saved preference and an exact detail from the earlier call.
-7. Ask for a phone reminder at T1, then move it to T2. Show unchanged IDs and both effective times.
+7. Ask for a phone reminder at T1, then move it to T2. Show unchanged IDs and the effective native time and final outcome.
 8. From Hermes chat, request an outgoing call with a complete purpose. Listen for the cached introduction, then let the recipient reply.
 9. Ask for substantial work that should continue after hangup. Show acceptance, then actual completion and Telegram delivery.
 10. In an admin call, demonstrate a scoped owner lookup and a confirmed new chat. Explain that resetting chat preserves saved notes.
@@ -82,10 +83,10 @@ and tested. Describe Telegram reminders as messages, not interactive cards.
 - [ ] O03 — Include several objectives and one explicit constraint in the brief. Pass: the assistant retains all of them without inventing names, relationships, prior calls or permission to book something.
 - [ ] O04 — Call a new number without an incoming route. Pass: an eligible outgoing endpoint is selected; the automatic route has conversation/notes access, not personal admin tools. The outgoing call does not add an incoming permission grant.
 - [ ] O05 — Call a recipient again after saving a disposable preference. Pass: that recipient's notes are used; another recipient's details are not.
-- [ ] O06 — Inspect the outgoing start receipt. Pass: voice readiness is reported separately from the conversation result, booking success and whether the recipient heard a message.
+- [ ] O06 — Inspect the outgoing start receipt and later attempt outcome. Pass: scheduling acceptance, voice readiness, objective completion and whether the recipient heard a message are reported separately.
 - [ ] O07 ADVANCED — Repeat an owner-admitted call request with the same exact request ID and arguments. Pass: the existing receipt is returned without a second dial; changed arguments are rejected.
 - [ ] O08 — Attempt a blocked destination and the paired handset's own SIM number. Pass: both are refused before dialing.
-- [ ] O09 — Have the demo recipient reject/not answer a call. Pass: the outcome is accurate and there is no automatic redial after failure or uncertainty.
+- [ ] O09 — Have the demo recipient reject/not answer a call. Pass: the outcome is accurate; Hermes chooses any bounded retry after a verified failed connection. A clear spoken refusal stops attempts, and uncertainty requires guidance.
 - [ ] O10 CONFIG — With multiple endpoints and no unambiguous outgoing endpoint, try a new destination. Pass: ambiguity is refused until explicitly configured; no random profile is selected.
 
 ## Caller notes and automatic memory
@@ -154,22 +155,31 @@ and tested. Describe Telegram reminders as messages, not interactive cards.
 
 - [ ] R01 VIDEO — Ask for a text reminder at a specific future date/time/timezone. Pass: `hfp_phone_schedule_reminder` returns a native job ID and matching read-back; the Telegram message actually arrives.
 - [ ] R02 — In separate tests use `delay_minutes`, `delay_seconds` and exact timezone-aware `run_at`. Pass: each yields the intended effective time; ambiguous dates/AM/PM and reminder lead times are clarified.
-- [ ] R03 VIDEO — Ask “Call me at T1 to remind me about <demo-topic>.” Pass: `hfp_phone_schedule_call` saves the daemon callback and linked Telegram reminder, with both IDs and matching authoritative times.
-- [ ] R04 VIDEO — Say “Move that same callback to T2.” Pass: `hfp_phone_reschedule_callback` uses the exact callback ID, stable change request ID and current revision; both times read back as T2, IDs/link stay unchanged, and the verification status is applied.
-- [ ] R05 VIDEO — Wait through T1, then T2. Pass: the original callback/reminder does not fire at T1; the moved call and Telegram reminder are observed at/after T2. Record actual times and the recipient's confirmation, allowing native scheduler/model delays.
-- [ ] R06 ADVANCED — Replay the identical reschedule request. Pass: its recorded receipt is returned with no extra callback, reminder or change. Reusing its ID with changed arguments is rejected.
-- [ ] R07 ADVANCED — Replay identical callback creation using its stable request ID and exact `run_at`. Pass: no second callback/reminder is created; uncertain reminder creation remains explicitly partial on replay.
+- [ ] R03 VIDEO — Ask “Call me at T1 to remind me about <demo-topic>.” Pass: one native Hermes no-agent phone job is verified, with a callback ID and cron_job_id; reminder_job_id is the same job alias. No companion instruction reminder exists.
+- [ ] R04 VIDEO — Say “Move that same callback to T2.” Pass: exact callback ID, stable change ID and current revision are used; the same native job reads back as T2 and verification is applied.
+- [ ] R05 VIDEO — Wait through T1, then T2. Pass: no call at T1; the moved call starts at/after T2. After it ends, Telegram states its outcome and Hermes decision, including any verified next attempt.
+- [ ] R06 ADVANCED — Replay the identical reschedule request. Pass: its recorded receipt is returned with no extra workflow, native job or change. Reusing its ID with changed arguments is rejected.
+- [ ] R07 ADVANCED — Replay identical creation using stable request ID and exact run_at. Pass: the same workflow and native job are returned; uncertain creation never produces another job.
 - [ ] R08 ADVANCED — Submit a stale revision or target without timezone. Pass: the operation is rejected without changing schedules.
-- [ ] R09 VIDEO — Cancel a separate pending callback before it is due. Pass: `hfp_phone_cancel_callback` cancels the callback and pauses its linked reminder; observe no later call/message from them. Inspect and report reminder-pause failure separately.
-- [ ] R10 ADVANCED — Try to move/cancel a firing or terminal callback, or collide cancellation with reconciliation. Pass: conflicting changes are rejected safely; there is no second dial.
+- [ ] R09 VIDEO — Cancel a separate pending request. Pass: no future attempts occur. Cancel an active request separately: future decisions are blocked, while the current call continues until normal hangup.
+- [ ] R10 ADVANCED — Try to move a firing/terminal attempt or use a stale revision. Pass: no change or extra dial. Cancellation may stop future attempts without hanging up the current call.
 - [ ] R11 ADVANCED — Make one schedule update/read-back fail or time out. Pass: requested/effective values and failed/partial/uncertain status are retained; no false success and no callback firing while the change is unresolved.
-- [ ] R12 ADVANCED — Restart during an unresolved correction. Pass: reconciliation uses existing identities and resolves by read-back without replaying a call or uncertain notification.
-- [ ] R13 ADVANCED — Move a callback without a linked reminder. Pass: the callback result explicitly shows the missing reminder instead of implying both schedules were verified.
-- [ ] R14 ADVANCED — In an isolated callback test, recover more than five minutes after its due time. Pass: it is marked missed/failed rather than making a surprise late call.
-- [ ] R15 — Inspect a callback where the handset is unavailable at the due time. Pass: the failure is retained and no automatic redial is made.
+- [ ] R12 ADVANCED — Restart between scheduling, dialing, outcome and decision. Pass: verified progress survives; no uncertain call, completed action or claimed report is replayed.
+- [ ] R13 ADVANCED — Make native job creation or read-back unavailable. Pass: the request remains held, reports unverified, and cannot dial through a fallback daemon timer.
+- [ ] R14 ADVANCED — In an isolated callback test, recover after its due time. Pass: native Hermes catch-up policy applies; the plugin has no separate five-minute timer. Expired, cancelled or changed occurrences cannot dial.
+- [ ] R15 — Inspect an attempt where the handset is unavailable. Pass: the failure is retained; Hermes decides a bounded retry or asks for guidance, and any new native schedule is verified.
 - [ ] R16 — Disconnect Bluetooth while idle for a text-only reminder test. Pass: the native Telegram reminder still works; a phone callback requires HFP readiness. Reconnect before the next call.
 - [ ] R17 — Ask to save an appointment fact without asking for a reminder or booking. Pass: notes are saved independently; no unsolicited schedule or calendar event appears.
 - [ ] R18 ADVANCED — Inspect task completion after a failed time correction. Pass: its notice leads with the verified/uncertain schedule receipt and actual effective time, not a generic successful-move claim.
+
+- [ ] R19 VIDEO — Ignore an outgoing attempt. Pass: a verified not-connected outcome triggers Hermes follow-up; Telegram gives its decision and any next native schedule. At most three launched attempts occur.
+- [ ] R20 VIDEO — Recipient says “Call tomorrow at 10 AM.” Pass: Hermes defers using the evidenced time and original objective, rather than treating it as an unanswered call.
+- [ ] R21 VIDEO — Recipient clearly declines. Pass: the request closes declined and no later call is scheduled.
+- [ ] R22 VIDEO — Recipient agrees to a request. Pass: the report describes the agreement accurately; it does not claim an external action, such as uploading a video, happened without verification.
+- [ ] R23 ADVANCED — Interrupt transport or make an outcome uncertain. Pass: Hermes asks for guidance/reconciliation; no blind automatic retry.
+- [ ] R24 ADVANCED — Check retries at 08:00/22:00, native catch-up, and the seven-day or earlier explicit deadline. Pass: automatic retry admission uses 08:00 inclusive–22:00 exclusive in the requester timezone, with at most three launched attempts. Explicit owner timing and evidenced recipient times use the documented hours exception; an out-of-hours automatic catch-up requires guidance.
+- [ ] R25 ADVANCED — Revoke the original owner route before a future attempt or report. Pass: execution/result authority fails closed, with no other profile access.
+- [ ] R26 — Recall the recipient and previous progress in a later call. Pass: permitted memory remains scoped and verified completed actions are not repeated.
 
 ## Admin lookup and caller permissions
 
@@ -266,3 +276,8 @@ Verified video scenes: __________  Skipped or unconfigured scenes: __________
 
 Reference: [routing and operations](phone-routing.md), [compatibility](compatibility.md),
 [deployment evidence](demo-readiness-2026-10-07.md).
+
+Current native-workflow acceptance maps to TASK-01/02, WORKFLOW-01 and LIVE-03
+in the [implementation specification](implementation-spec.md). Existing saved
+checklist results describe the build actually tested; re-run changed scenarios
+for the new workflow rather than inheriting a historical Pass.
