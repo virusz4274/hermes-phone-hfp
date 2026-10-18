@@ -2042,10 +2042,8 @@ def _live_config(
         )
     if "end_call" in allowed_tools:
         system_instruction += (
-            "Use end_call for a real hangup request made in this physical call, respecting "
-            "any condition the caller attached. Never end a new call because retained "
-            "dialogue contains a previous goodbye or disconnect request. Wait for current "
-            "caller speech before considering assistant-initiated hangup. ")
+            "End the call only when the current caller clearly asks to finish or says goodbye; "
+            "completing a task does not end the conversation. ")
     if 'hermes_task' in allowed_tools:
         system_instruction += "If the caller asks to stay on the call until confirmation, set ask_hermes.wait_for_confirmation=true or use hermes_task wait for existing work. Set end_call.cancel_wait only when the caller explicitly retracts that condition. "
     if "phone_notes" in allowed_tools:

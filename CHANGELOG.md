@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Clarify Gemini's existing hangup instruction: only a current-caller request or
+  goodbye ends the conversation; completing a task does not. No additional model
+  checks, tool arguments, or confirmation steps are introduced.
+
+- Reconcile caller notes through the existing after-call merge using a generic
+  instruction. Support targeted revisions with brief history and retained source
+  dates, preserve unrelated text, and prevent delayed saves from revising newer
+  information without adding agent sessions or scheduled maintenance.
+
 - Fix outgoing purpose delivery after the recipient's hello, including retained
   history and reconnects. Separate incoming and outgoing opening instructions.
 - Save configurable missed-call retry delays per request, use deterministic

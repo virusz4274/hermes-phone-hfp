@@ -495,6 +495,14 @@ tool. This works with Gemini and classic voice, with or without continuity.
 Extraction uses the routed Hermes profile's tools-disabled auxiliary model path
 (`auxiliary.phone_memory` can configure that task); it does not start a personal
 agent, create reminders, or perform actions discussed on the call.
+The existing after-call merge also revises clearly related notes using a generic
+instruction: update notes with supported information, preserve unrelated facts,
+and keep brief dated history where useful without guessing. It uses the same
+merge model call, not another agent session or scheduled maintenance job.
+Ambiguous relationships stay separate. The model proposes edits to identified
+entries; code validates the references and preserves unselected text. Semantic
+matching still depends on the model. Existing saved notes are reconciled only
+when new information arrives, with no bulk rewrite during upgrades.
 Extraction requires an exact caller quote and an assessment of confidence and
 relevance, including near-term plans and delivery updates. Uncertain fragments,
 conversational filler, and assistant-capability
@@ -519,7 +527,10 @@ Notes reads return `revision`. All public replacement writes, including
 `hfp_caller_update`, `hfp_phone_caller_update`, and `phone_notes`, require
 `expected_revision` from that read. A stale write returns HTTP 409 (or
 `notes_conflict` in the caller tool): read again and merge. Existing notes are
-preserved while dated additions and corrections are appended. An exact fact
+preserved while related entries can be consolidated with a brief history and
+other new information is appended. Reporting dates and call attribution are
+rendered by code; delayed saves cannot revise newer dated information. Undated
+notes use their last save time conservatively for this check. An exact fact
 already saved during the call receives its missing date/source annotation without
 adding another copy of that fact. The 8,000-character
 limit still applies; capacity failure leaves the old notes intact.
