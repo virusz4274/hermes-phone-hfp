@@ -21,8 +21,8 @@ class FakeJobs:
         return datetime.fromisoformat(job['schedule']['run_at']).timestamp()
 
     def create(self, row, ordinal):
-        from hfp_mcp import reminders
-        reminders.telegram_destination()
+        from hfp_mcp.phone_workflows import NativePhoneJobs
+        destination = NativePhoneJobs.destination(row)
         key = row['id'] + ':' + str(ordinal)
         if key not in self.jobs:
             import hashlib
@@ -30,9 +30,22 @@ class FakeJobs:
             job = {'id': key, 'state': 'paused', 'script': script, 'no_agent': True, 'last_run_at': None,
                    'schedule': {'run_at': datetime.fromtimestamp(row['run_at'], timezone.utc).isoformat()}}
             self.jobs[key] = job
-            self.log.append({'no_agent': True, 'script': script, 'schedule': job['schedule']['run_at'], 'deliver': 'telegram'})
+            self.log.append({'no_agent': True, 'script': script, 'schedule': job['schedule']['run_at'], 'deliver': destination})
             if self.fail_create:
                 raise TimeoutError('native response lost after durable creation')
+        return self.jobs[key]
+
+    def create_notification(self, row):
+        import hashlib
+        from hfp_mcp.phone_workflows import NativePhoneJobs
+        key = row['id'] + ':notification'
+        if key not in self.jobs:
+            job = {'id': key, 'state': 'paused', 'last_run_at': None, 'no_agent': True,
+                   'script': 'hfp-reminder-' + hashlib.sha256(row['id'].encode()).hexdigest() + '.py',
+                   'schedule': {'run_at': datetime.fromtimestamp(row['notification_run_at'], timezone.utc).isoformat()}}
+            self.jobs[key] = job
+            self.log.append({'deliver': NativePhoneJobs.report_destination(row), 'no_agent': True,
+                             'script': job['script'], 'schedule': job['schedule']['run_at']})
         return self.jobs[key]
 
     def get(self, key):
@@ -74,6 +87,9 @@ def manager(tmp_path, monkeypatch):
     cfg = RoutingConfig.parse(routing_data())
     monkeypatch.setattr(RoutingConfig, 'load', classmethod(lambda cls: cfg))
     monkeypatch.setattr('hfp_mcp.reminders.telegram_destination', lambda: 'telegram')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: {
+        'platform': 'telegram', 'chat_id': 'owner', 'thread_id': None, 'deliver': 'telegram:owner'})
+    monkeypatch.setattr('hfp_mcp.hermes_compat.validate_gateway_destination', lambda _: None)
     store = CallerStore(tmp_path / 'hfp-phone/callers.sqlite3')
     bridge = PhoneBridge(cfg, store, profile='default', profile_config={})
     bridge.workflows.jobs = FakeJobs()
@@ -121,6 +137,145 @@ def test_creation_native_only_and_exact_schedule(manager):
     assert len(manager.jobs.jobs) == 1 and manager.jobs.log[0]['no_agent']
     assert row['verification']['callback_run_at'] == row['verification']['reminder_run_at']
     assert row['status'] == 'scheduled' and row['attempt_count'] == 0
+
+
+def reminder(manager, mode='both', key='reminder'):
+    return manager.schedule({'request_id': key, 'purpose': 'Remember to cut your hair',
+        'run_at': datetime.fromtimestamp(time.time()+600, timezone.utc).isoformat()}, 'hfp-admin',
+        delivery_plan={'mode': mode, 'gateway': None if mode == 'call' else {
+            'platform': 'slack', 'chat_id': 'home', 'thread_id': '42', 'deliver': 'slack:home:42'},
+            'notify_at_due': mode == 'both'})['callback']
+
+
+def fire_notification(manager, row, execution_id='notice'):
+    job_id = row['notification_job_id']
+    manager.jobs.executions[execution_id] = {'job_id': job_id, 'status': 'running',
+        'scheduled_instant': manager.jobs.get(job_id)['schedule']['run_at']}
+    return manager.notification(row['id'], job_id, execution_id)
+
+
+def test_both_reminder_moves_and_cancels_both_components(manager):
+    row = reminder(manager)
+    assert len(manager.jobs.jobs) == 2
+    assert manager.jobs.log[0]['deliver'] == 'local'
+    assert manager.jobs.log[1]['deliver'] == 'slack:home:42'
+    moved = manager.reschedule({'callback_id': row['id'], 'request_id': 'move-both',
+        'expected_revision': row['revision'],
+        'run_at': datetime.fromtimestamp(time.time()+1800, timezone.utc).isoformat()})['callback']
+    assert moved['run_at'] == moved['notification_run_at']
+    assert manager.jobs.instant(manager.jobs.get(row['cron_job_id'])) == manager.jobs.instant(manager.jobs.get(row['notification_job_id']))
+    cancelled = manager.cancel(row['id'])
+    assert cancelled['ok'] and all(j['state'] == 'paused' for j in manager.jobs.jobs.values())
+    with pytest.raises(PermissionError):
+        fire_notification(manager, moved)
+
+
+def test_notification_claim_is_durable_and_does_not_repeat_on_call_retry(manager):
+    row = reminder(manager)
+    first = fire_notification(manager, row)
+    assert first['report'] == 'Reminder: Remember to cut your hair.'
+    assert fire_notification(manager, row)['report'] == ''
+    assert manager.store.get(row['id'])['notification_claimed']
+    # A new callback attempt must reuse the already-created initial reminder.
+    with manager.store.lock, manager.store.db:
+        current = manager.store.get(row['id'])
+        current.update(status='holding', attempts=[{'id': 'prior', 'ordinal': 1}])
+        manager.store.save(current)
+    manager.publish(current)
+    assert len([j for j in manager.jobs.jobs if j.endswith(':notification')]) == 1
+
+
+def test_failed_gateway_does_not_block_callback_and_is_visible(manager, monkeypatch):
+    row = reminder(manager)
+    def unavailable(_):
+        raise ValueError('Gateway disconnected')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.validate_gateway_destination', unavailable)
+    with pytest.raises(ValueError, match='disconnected'):
+        fire_notification(manager, row)
+    manager.jobs.get(row['notification_job_id']).update(state='error', last_error='Gateway disconnected')
+    execution = manager.jobs.fire(row)
+    assert manager.admit(row['id'], row['cron_job_id'], execution)[2]
+    status = manager.public(manager.store.get(row['id']))
+    assert status['components']['gateway_reminder']['last_error'] == 'Gateway disconnected'
+
+
+def test_partial_linked_move_recovers_without_new_jobs(manager, monkeypatch):
+    row = reminder(manager)
+    move = manager.jobs.move
+    def fail_second(job_id, instant):
+        if job_id == row['notification_job_id']:
+            raise TimeoutError('Reminder move response lost')
+        return move(job_id, instant)
+    monkeypatch.setattr(manager.jobs, 'move', fail_second)
+    args = {'callback_id': row['id'], 'request_id': 'partial-both', 'expected_revision': row['revision'],
+            'run_at': datetime.fromtimestamp(time.time()+1800, timezone.utc).isoformat()}
+    with pytest.raises(TimeoutError):
+        manager.reschedule(args)
+    assert manager.store.get(row['id'])['status'] == 'holding'
+    with pytest.raises(PermissionError):
+        fire_notification(manager, row)
+    monkeypatch.setattr(manager.jobs, 'move', move)
+    manager.reconcile_schedules()
+    moved = manager.reschedule(args)['callback']
+    assert moved['run_at'] == moved['notification_run_at'] and len(manager.jobs.jobs) == 2
+
+
+def test_missing_linked_notification_cannot_be_silently_rescheduled(manager):
+    row = reminder(manager)
+    manager.jobs.jobs.pop(row['notification_job_id'])
+    with pytest.raises(WorkflowConflict):
+        manager.reschedule({'callback_id': row['id'], 'request_id': 'missing-notice', 'expected_revision': 0,
+            'run_at': datetime.fromtimestamp(time.time()+1800, timezone.utc).isoformat()})
+
+
+def test_call_only_outcome_stays_local(manager):
+    row = reminder(manager, 'call')
+    execution = manager.jobs.fire(row)
+    _, attempt, _ = manager.admit(row['id'], row['cron_job_id'], execution)
+    manager.store.update_attempt(row['id'], attempt['id'], report='Completed reminder', status='decided')
+    response = manager.report(row['id'], attempt['id'], execution)
+    assert response['ready'] and response['report'] == '' and response['delivery'] == 'local'
+    assert len(manager.jobs.jobs) == 1
+
+
+def test_lost_linked_creation_response_recovers_the_existing_jobs(manager, monkeypatch):
+    create = manager.jobs.create_notification
+    def lost(row):
+        create(row)
+        raise TimeoutError('Response lost after durable reminder creation')
+    monkeypatch.setattr(manager.jobs, 'create_notification', lost)
+    with pytest.raises(TimeoutError):
+        reminder(manager)
+    held = manager.store.rows()[0]
+    assert held['status'] == 'holding' and len(manager.jobs.jobs) == 2
+    assert held['component_errors']['scheduling']
+    monkeypatch.setattr(manager.jobs, 'create_notification', create)
+    manager.reconcile_schedules()
+    recovered = manager.store.get(held['id'])
+    assert recovered['status'] == 'scheduled' and recovered['notification_job_id']
+    assert len(manager.jobs.jobs) == 2 and not recovered['component_errors']
+
+
+def test_both_outcome_uses_a_separate_report_job(manager):
+    row = reminder(manager)
+    execution = manager.jobs.fire(row)
+    _, attempt, _ = manager.admit(row['id'], row['cron_job_id'], execution)
+    manager.store.update_attempt(row['id'], attempt['id'], report='Completed reminder', status='decided')
+    response = manager.report(row['id'], attempt['id'], execution)
+    assert response['ready'] and response['report'] == ''
+    assert response['delivery'] == 'separate_report_job'
+    assert not manager.store.get(row['id'])['attempts'][0]['report_claimed']
+
+
+def test_legacy_workflow_keeps_telegram_policy_without_native_default_resolution(manager, monkeypatch):
+    def unavailable():
+        raise AssertionError('Legacy workflow must not select a new gateway')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', unavailable)
+    row = manager.store.create(request_id='legacy', number='+919876543210', purpose='Existing callback',
+        run_at=time.time()+600, authority=manager.authority('hfp-admin'), timezone_name='UTC')
+    assert manager.publish(row)['ok']
+    assert manager.jobs.log[0]['deliver'] == 'telegram'
+    assert 'delivery_plan' not in manager.store.get(row['id'])
 
 
 def test_duplicate_creation_survives_restart_and_lost_response(manager):
@@ -269,8 +424,11 @@ def test_uncertain_outcome_cannot_retry(manager):
         decide(manager, row, attempt)
 
 
-def test_third_attempt_requires_owner_guidance(manager):
-    row, attempt = deciding(manager, count=3)
+def test_fourth_attempt_requires_owner_guidance(manager):
+    row, attempt = deciding(manager, count=4)
+    with manager.store.lock, manager.store.db:
+        row['automatic_retries_used'] = 3
+        manager.store.save(row)
     with pytest.raises(ValueError, match='attempt limit'):
         decide(manager, row, attempt)
 
@@ -310,13 +468,13 @@ def test_calling_hours_and_deadline():
         retry_time({**row, 'deadline': now+60}, now=now)
 
 
-async def test_full_attempt_drives_hermes_decision_and_one_report(manager, monkeypatch):
+async def test_connected_objective_drives_hermes_decision_without_routine_report(manager, monkeypatch):
     from hfp_mcp import hermes_api, hermes_sessions, phone_cli
     row = schedule(manager)
     execution = manager.jobs.fire(row)
     row, attempt, _ = manager.admit(row['id'], row['cron_job_id'], execution)
     calls = []
-    outcome = {'connection_state': 'not_connected', 'termination_reason': 'busy', 'uncertain': False,
+    outcome = {'connection_state': 'connected', 'termination_reason': 'disconnected', 'uncertain': False,
                'still_active': False, 'evidence': [], 'verified_actions': []}
     def control(path, body=None):
         calls.append((path, body))
@@ -339,7 +497,8 @@ async def test_full_attempt_drives_hermes_decision_and_one_report(manager, monke
     await manager.run(row['id'], attempt['id'])
     assert sum(path.endswith('workflow-call') for path, _ in calls) == 1
     report = manager.report(row['id'], attempt['id'], execution)
-    assert report['ready'] and 'busy' in report['report'] and 'Next call:' in report['report']
+    assert report['ready'] and report['report'] == ''
+    assert 'Next call:' in manager.store.get(row['id'])['attempts'][0]['diagnostic_report']
     assert manager.report(row['id'], attempt['id'], execution)['report'] == ''
     assert len(manager.store.get(row['id'])['attempts']) == 1
 

@@ -3553,6 +3553,11 @@ def _create_phone_controller(routing):
             context_provider=(controller.conversation.context if controller.conversation else
                               notes_context if "phone_notes" in _gemini_allowed_tools else None),
             context_ready=controller.conversation.voice_ready if controller.conversation else None)
+        _gemini_live_manager.call_direction = controller.snapshot().get('call', {}).get('direction')
+        _gemini_live_manager.call_purpose = controller.call_brief()
+        if controller.callback_source():
+            _gemini_allowed_tools |= {'request_callback'}
+            _gemini_live_manager._allowed_tools |= {'request_callback'}
         if controller.snapshot().get('call', {}).get('direction') == 'outgoing':
             from .audio.opening import outgoing_opening
             _gemini_live_manager.outgoing_opening = outgoing_opening(

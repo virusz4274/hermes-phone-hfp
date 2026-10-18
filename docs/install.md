@@ -113,6 +113,14 @@ For a custom location, pass `--phone-config /absolute/path/to/calls.yaml` to `se
 
 The example selects the existing `default` Hermes profile, admin permissions and Gemini Live. Your normal Hermes approval rules still apply. Number matching is the identity basis for this route; caller ID is not cryptographic authentication.
 
+For reminders requested during calls, optionally set
+`phone.reminders.default_delivery` to `gateway`, `call`, or `both` in that YAML.
+Omitting it preserves gateway-only reminders. Gateway notifications use Hermes's
+configured default home destination, so no platform name is required. `call`
+requires no messaging gateway. See [reminder delivery](phone-routing.md) for
+overrides and linked callback management. Restart the affected Hermes gateway
+and HFP daemon after changing this setting.
+
 The example also sets `continuity: true` on that number route. This saves phone
 dialogue in the daemon's existing database, resumes the caller's conversation,
 and links a native Hermes task session. Existing routes remain unchanged until
@@ -241,16 +249,17 @@ if its plugin entry point is missing. Restart `hermes-gateway.service` and
 
 The changes are additive and preserve conversation/session history. Set
 `phone.max_phone_tasks: 2` and `phone.background_task_minutes: 30`, and opt in with
-`background_tasks: true` only on the intended admin policy after configuring the
-profile's native Telegram home channel. No new service, sender plugin or cron job
+`background_tasks: true` only on the intended admin policy. Configure the
+profile's native gateway home destination for external completion notices;
+call-only reminders do not require one. No new service, sender plugin or cron job
 is installed. See [natural task handling](phone-routing.md#natural-task-handling).
 
 ## Scheduled phone requests
 
 Purpose-bearing owner calls and scheduled callbacks require the native Hermes
 workflow capabilities listed in [compatibility](compatibility.md#native-phone-workflows).
-The plugin does not provide a daemon-timer fallback. Configure native Telegram
-home delivery before promising phone outcome reports. Start with a read-only
+The plugin does not provide a daemon-timer fallback. Configure a native gateway
+home destination before promising phone outcome reports. Start with a read-only
 status/doctor check; a saved schedule is not proof of a successful call or message.
 Use [the workflow guide](hermes-call-workflows.md) for limits and live rehearsals,
 and [maintenance](maintenance.md#native-phone-workflow-upgrade) before upgrading

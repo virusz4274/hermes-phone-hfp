@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Fix outgoing purpose delivery after the recipient's hello, including retained
+  history and reconnects. Separate incoming and outgoing opening instructions.
+- Save configurable missed-call retry delays per request, use deterministic
+  decisions for busy/unanswered and reminder calls, and add scoped conversational
+  callbacks that preserve the same objective and automatic retry budget.
+- Keep normal cron wrappers while rendering concise reminder bodies and verified
+  scheduling confirmations. Suppress routine attempt reports; retain structured
+  receipts and errors in diagnostics. Repair restricted evaluator tool discovery.
+
+- Configure phone reminder delivery as gateway, call, or both. Use Hermes's native
+  default gateway destination, support call-only operation without Telegram, and
+  manage linked reminder/callback schedules together with durable recovery.
+
 - Native Hermes scheduling and bounded outcome-driven phone follow-up replace the daemon callback timer and companion call-instruction reminder.
 - Durable profile-scoped requests, attempt evidence, restricted Hermes decisions, cancellation and restart safeguards distinguish connection from objective completion.
 - Reconcile planning, capability claims, data retention and coordinated upgrade

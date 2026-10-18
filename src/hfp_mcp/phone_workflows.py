@@ -17,8 +17,9 @@ from zoneinfo import ZoneInfo
 
 from .contracts import normalize_phone_number, validate_call_purpose, validate_request_id
 from .reminders import same_instant
+from .phone_messages import subject, local_time
 
-FINAL = {'completed', 'declined', 'cancelled', 'expired'}
+FINAL = {'completed', 'declined', 'cancelled', 'expired', 'exhausted'}
 BLOCKED = FINAL | {'needs_guidance', 'uncertain', 'holding'}
 
 
@@ -61,7 +62,8 @@ class WorkflowStore:
         with self.lock:
             return [json.loads(r[0]) for r in self.db.execute('SELECT data FROM phone_workflows WHERE profile=?', (self.profile,))]
 
-    def create(self, *, request_id, number, purpose, run_at, authority, timezone_name, region='IN', origin_session=None, deadline=None):
+    def create(self, *, request_id, number, purpose, run_at, authority, timezone_name, region='IN', origin_session=None, deadline=None, delivery_plan=None,
+               kind='objective', retry_delays=None, root_request_id=None):
         request_id = validate_request_id(request_id)
         number = normalize_phone_number(number, region)
         purpose = validate_call_purpose(purpose)
@@ -69,7 +71,12 @@ class WorkflowStore:
             raise ValueError('a purpose and finite schedule time are required')
         ZoneInfo(timezone_name)
         key = 'cb-' + request_id
-        fingerprint = hashlib.sha256(json.dumps([number, purpose, run_at, authority, deadline], sort_keys=True).encode()).hexdigest()
+        identity = [number, purpose, run_at, authority, deadline]
+        if delivery_plan is not None:
+            identity.append(delivery_plan)
+        if retry_delays is not None:
+            identity.append([kind, list(retry_delays), root_request_id])
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         with self.lock, self.db:
             existing = self.db.execute('SELECT data FROM phone_workflows WHERE id=?', (key,)).fetchone()
             if existing:
@@ -89,6 +96,13 @@ class WorkflowStore:
                        created_at=now, deadline=expires, run_at=run_at, revision=0,
                        status='holding', attempts=[], cron_job_id=None, reminder_job_id=None,
                        operations={}, last_decision=None, max_attempts=3)
+            if delivery_plan is not None:
+                row.update(delivery_plan=delivery_plan, notification_job_id=None,
+                           notification_run_at=run_at, notification_claimed=False)
+            if retry_delays is not None:
+                row.update(schema_version=2, kind=kind, retry_delays_minutes=list(retry_delays),
+                           automatic_retries_used=0, root_request_id=root_request_id or key,
+                           max_attempts=1+len(retry_delays))
             self.save(row)
             return row
 
@@ -98,6 +112,16 @@ class WorkflowStore:
                                   'last_decision', 'max_attempts')} | {
             'attempt_count': len(row['attempts']), 'attempts': [self.public_attempt(a) for a in row['attempts']],
             'workflow_status': row['status'], 'scheduler': 'hermes',
+            'delivery_plan': row.get('delivery_plan'),
+            'notification_job_id': row.get('notification_job_id'),
+            'notification_run_at': row.get('notification_run_at'),
+            'notification_claimed': row.get('notification_claimed', False),
+            'component_errors': row.get('component_errors', {}),
+            'kind': row.get('kind', 'objective'),
+            'retry_delays_minutes': row.get('retry_delays_minutes'),
+            'automatic_retries_used': row.get('automatic_retries_used'),
+            'root_request_id': row.get('root_request_id'),
+            'delivery_status': row.get('delivery_status'),
             'verification': row.get('verification'), 'schedule_change': row.get('schedule_change')}
 
     @staticmethod
@@ -121,7 +145,7 @@ class WorkflowStore:
                 return row, previous, False
             if row['status'] != 'scheduled' or row['cron_job_id'] != job_id or not same_instant(scheduled_time, row['run_at']):
                 raise WorkflowConflict('request changed, paused, cancelled or already executing')
-            if time.time() >= row['deadline'] or len(row['attempts']) >= row['max_attempts']:
+            if time.time() >= row['deadline'] or (row.get('schema_version') != 2 and len(row['attempts']) >= row['max_attempts']):
                 raise WorkflowConflict('phone request deadline or attempt limit reached')
             attempt = dict(id='hfp-attempt-' + hashlib.sha256((row['id'] + ':' + str(len(row['attempts']) + 1)).encode()).hexdigest()[:40],
                            ordinal=len(row['attempts']) + 1, job_id=job_id, execution_id=execution_id,
@@ -164,7 +188,8 @@ def retry_time(row, requested=None, *, now=None, explicit_recipient_time=False, 
     now = time.time() if now is None else now
     if requested is None:
         requested = now + (600 if len(row['attempts']) == 1 else 1800)
-    if type(requested) not in (float, int) or not math.isfinite(requested) or requested < now + (0 if explicit_owner_time else 120):
+    minimum = 0 if explicit_owner_time or explicit_recipient_time or row.get('schema_version') == 2 else 120
+    if type(requested) not in (float, int) or not math.isfinite(requested) or requested < now + minimum:
         raise ValueError('automatic retry must be at least two minutes in the future')
     local = datetime.fromtimestamp(requested, ZoneInfo(row['timezone']))
     if not explicit_recipient_time and not explicit_owner_time:
@@ -196,9 +221,25 @@ class NativePhoneJobs:
     def instant(job):
         return datetime.fromisoformat(job['schedule']['run_at'].replace('Z', '+00:00')).timestamp()
 
+    @staticmethod
+    def destination(row):
+        plan = row.get('delivery_plan')
+        if plan is None:
+            # Existing persisted callbacks retain their original delivery policy.
+            from .reminders import telegram_destination
+            return telegram_destination()
+        # A missing messaging transport must not prevent a reminder's physical call.
+        if plan.get('notify_at_due'):
+            return 'local'
+        return plan['gateway']['deliver'] if plan.get('gateway') else 'local'
+
+    @staticmethod
+    def report_destination(row):
+        plan = row.get('delivery_plan')
+        return plan['gateway']['deliver'] if plan and plan.get('gateway') else NativePhoneJobs.destination(row)
+
     def create(self, row, ordinal):
         from cron.jobs import create_job, list_jobs
-        from .reminders import telegram_destination
         marker = 'hfp-phone-' + hashlib.sha256(row['id'].encode()).hexdigest() + '-' + str(ordinal) + '.py'
         scripts = self.home / 'scripts'
         scripts.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -211,14 +252,14 @@ class NativePhoneJobs:
         with os.fdopen(fd, 'w') as handle:
             handle.write(content)
         with self.scope():
-            destination = telegram_destination()
+            destination = self.destination(row)
             existing = [j for j in list_jobs(include_disabled=True) if j.get('script') == marker]
             if len(existing) > 1:
                 raise WorkflowConflict('multiple native jobs match this attempt; held for review')
             if existing:
                 return existing[0]
             return create_job(prompt='Execute the bound phone attempt and report its verified outcome and Hermes decision.',
-                              name='Phone request ' + row['id'][-12:],
+                              name='Call: ' + subject(row['purpose'])[:72],
                               schedule=datetime.fromtimestamp(row['run_at'], timezone.utc).isoformat(),
                               repeat=1, deliver=destination, script=marker, no_agent=True,
                               paused=True, paused_reason='Verifying phone request linkage')
@@ -230,7 +271,6 @@ class NativePhoneJobs:
 
     def create_report(self, row, attempt):
         from cron.jobs import create_job, list_jobs
-        from .reminders import telegram_destination
         import os
         marker = 'hfp-phone-report-' + hashlib.sha256(attempt['id'].encode()).hexdigest() + '.py'
         script = self.home / 'scripts' / marker
@@ -248,9 +288,33 @@ class NativePhoneJobs:
                 raise WorkflowConflict('report job identity is unresolved')
             return matches[0] if matches else create_job(
                 prompt='Deliver the retained phone outcome and Hermes decision; never dial.',
-                name='Phone outcome ' + attempt['id'][-12:], schedule=datetime.fromtimestamp(time.time()+5, timezone.utc).isoformat(),
-                repeat=1, deliver=telegram_destination(), no_agent=True, script=marker, paused=True,
+                name='Call update: ' + subject(row['purpose'])[:72], schedule=datetime.fromtimestamp(time.time()+5, timezone.utc).isoformat(),
+                repeat=1, deliver=self.report_destination(row), no_agent=True, script=marker, paused=True,
                 paused_reason='Binding retained outcome report')
+
+    def create_notification(self, row):
+        """One initial reminder, independently executable while the call is running."""
+        from cron.jobs import create_job, list_jobs
+        import os
+        marker = 'hfp-reminder-' + hashlib.sha256(row['id'].encode()).hexdigest() + '.py'
+        script = self.home / 'scripts' / marker
+        script.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        content = ('from hfp_mcp.phone_workflow_runner import notification_main\nnotification_main('
+                   + repr(row['id']) + ', ' + repr(row['authority']['endpoint']) + ')\n')
+        if script.exists() and (script.is_symlink() or script.read_text() != content):
+            raise PermissionError('reminder script identity changed')
+        fd = os.open(script, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(content)
+        with self.scope():
+            matches = [j for j in list_jobs(include_disabled=True) if j.get('script') == marker]
+            if len(matches) > 1:
+                raise WorkflowConflict('multiple native jobs match this reminder')
+            return matches[0] if matches else create_job(
+                prompt='Deliver the bound reminder once; never dial.', name='Reminder: ' + subject(row['purpose'])[:72],
+                schedule=datetime.fromtimestamp(row['notification_run_at'], timezone.utc).isoformat(),
+                repeat=1, deliver=self.report_destination(row), failure_deliver='local', script=marker, no_agent=True,
+                paused=True, paused_reason='Verifying linked reminder and callback')
 
     def arm(self, job_id):
         from cron.jobs import resume_job
@@ -333,6 +397,16 @@ class PhoneWorkflows:
         return row
 
     def publish(self, row):
+        try:
+            return self._publish(row)
+        except Exception as exc:
+            with self.store.lock, self.store.db:
+                current = self.store.get(row['id'])
+                current['component_errors'] = {'scheduling': str(exc)}
+                self.store.save(current)
+            raise
+
+    def _publish(self, row):
         # The persisted holding state fences execution throughout the create/verify/arm gap.
         job = self.jobs.create(row, len(row['attempts']) + 1)
         if not same_instant(self.jobs.instant(job), row['run_at']) or job.get('last_run_at'):
@@ -341,44 +415,101 @@ class PhoneWorkflows:
             row = self.store.get(row['id'])
             row['cron_job_id'] = row['reminder_job_id'] = job['id']
             self.store.save(row)
+        jobs = [job]
+        if row.get('delivery_plan', {}).get('notify_at_due') and not row['attempts']:
+            notification = self.jobs.create_notification(row)
+            if not same_instant(self.jobs.instant(notification), row['notification_run_at']) or notification.get('last_run_at'):
+                raise WorkflowConflict('native reminder is uncertain or already ran')
+            with self.store.lock, self.store.db:
+                row = self.store.get(row['id'])
+                row['notification_job_id'] = notification['id']
+                self.store.save(row)
+            jobs.append(notification)
         def verify_and_arm():
-            self.jobs.arm(job['id'])
-            after = self.jobs.get(job['id'])
-            if not after or after.get('state') != 'scheduled' or not same_instant(self.jobs.instant(after), row['run_at']):
-                raise WorkflowConflict('native schedule could not be verified')
+            for component in jobs:
+                self.jobs.arm(component['id'])
+                after = self.jobs.get(component['id'])
+                if (not after or after.get('state') != 'scheduled'
+                        or not same_instant(self.jobs.instant(after), self.jobs.instant(component))):
+                    raise WorkflowConflict('native schedule could not be verified')
             with self.store.lock, self.store.db:
                 current = self.store.get(row['id'])
                 if current['status'] != 'holding':
                     raise WorkflowConflict('request changed while scheduling')
                 current['status'] = 'scheduled'
+                current['component_errors'] = {}
                 current['verification'] = {'verified': True, 'status': 'applied', 'requested_run_at': current['run_at'],
-                                          'callback_run_at': self.jobs.instant(after), 'reminder_run_at': self.jobs.instant(after),
+                                          'callback_run_at': current['run_at'], 'reminder_run_at': current['run_at'],
+                                          'notification_run_at': current.get('notification_run_at') if len(jobs) > 1 else None,
                                           'timezone': current['timezone'], 'scheduler': 'hermes'}
                 self.store.save(current)
                 return current
-        row = self.jobs.fenced(job['id'], verify_and_arm)
+        row = self.fenced_all([j['id'] for j in jobs], verify_and_arm)
         if not row:
             raise WorkflowConflict('native firing fence unavailable; request remains held')
         return self.receipt(row)
 
     def receipt(self, row):
-        return {'ok': row['status'] == 'scheduled', 'callback': self.store.public(row),
+        plan = row.get('delivery_plan')
+        return {'ok': row['status'] == 'scheduled', 'callback': self.public(row),
+                'delivery': plan['mode'] if plan else 'both',
+                'destination': plan.get('gateway') if plan else None,
                 'status': row['status'], 'timezone': row['timezone'], 'verification': row.get('verification'),
-                'reminder': {'scheduled': row['status'] == 'scheduled', 'job_id': row['cron_job_id'], 'delivery': 'telegram',
-                             'run_at': row['run_at'], 'kind': 'final_outcome_report'}}
+                'reminder': {'scheduled': row['status'] == 'scheduled',
+                             'job_id': row.get('notification_job_id') or row['cron_job_id'],
+                             'delivery': plan['mode'] if plan else 'telegram',
+                             'destination': plan.get('gateway') if plan else None,
+                             'run_at': row['run_at'],
+                             'kind': 'reminder_and_callback' if row.get('notification_job_id') else 'call_objective'}}
 
-    def schedule(self, args, session_id='', *, immediate=False):
+    def public(self, row):
+        snapshot = self.store.public(row)
+        components = {}
+        for name, job_id in (('callback', row.get('cron_job_id')), ('gateway_reminder', row.get('notification_job_id'))):
+            if not job_id:
+                continue
+            try:
+                job = self.jobs.get(job_id)
+                components[name] = {'job_id': job_id, 'state': job.get('state') if job else 'missing'}
+                if job:
+                    components[name].update({k: job.get(k) for k in ('last_status', 'last_error', 'last_delivery_error')})
+            except Exception:
+                components[name] = {'job_id': job_id, 'state': 'unavailable'}
+        snapshot['components'] = components
+        return snapshot
+
+    def fenced_all(self, job_ids, action):
+        """Acquire component firing fences in a stable order; never block a firing job."""
+        ids = sorted(set(job_ids))
+        def enter(index):
+            return action() if index == len(ids) else self.jobs.fenced(ids[index], lambda: enter(index + 1))
+        return enter(0)
+
+    def pending_components(self, row):
+        ids = [row['cron_job_id']] if row.get('cron_job_id') else []
+        if row.get('notification_job_id') and not row.get('notification_claimed'):
+            notification = self.jobs.get(row['notification_job_id'])
+            if not notification or (not notification.get('last_run_at') and notification.get('state') not in {'completed', 'error'}):
+                ids.append(row['notification_job_id'])
+        return ids
+
+    def schedule(self, args, session_id='', *, immediate=False, delivery_plan=None, kind='objective'):
         from .reminders import due_time
         from .call_memory import timezone_name
+        from .hermes_compat import gateway_destination
         authority = self.authority(session_id)
         number = args.get('number') or authority.get('number')
         if not number:
             raise ValueError('recipient number is required from owner chat')
         run_at = time.time() + 2 if immediate else due_time(args)
+        if delivery_plan is None:
+            delivery_plan = {'mode': 'both', 'gateway': gateway_destination(), 'notify_at_due': False}
         row = self.store.create(request_id=args.get('request_id') or 'hermes-callback-' + __import__('uuid').uuid4().hex,
                                 number=number, purpose=args['purpose'], run_at=run_at, authority=authority,
                                 timezone_name=timezone_name(self.bridge.config.timezone), region=self.bridge.config.region,
                                 origin_session=session_id,
+                                delivery_plan=delivery_plan,
+                                kind=kind, retry_delays=self.bridge.config.callback_retry_delays,
                                 deadline=parse_time(args['deadline']) if args.get('deadline') else None)
         self.authorize(row)
         if row['status'] == 'holding':
@@ -394,34 +525,38 @@ class PhoneWorkflows:
         key, target = args['callback_id'], parse_time(args['run_at'])
         row = self.store.get(key)
         self.authorize(row)
+        components = self.pending_components(row)
         def change():
             with self.store.lock, self.store.db:
                 current = self.store.get(key)
-                job = self.jobs.get(current['cron_job_id'])
                 if type(args['expected_revision']) is not int or current['revision'] != args['expected_revision'] or current['status'] != 'scheduled':
                     raise WorkflowConflict('stale revision or attempt is firing/terminal')
-                if not job or job.get('last_run_at') or job.get('state') != 'scheduled' or job.get('fire_claim') or job.get('run_claim'):
-                    raise WorkflowConflict('native job is firing, paused or terminal')
-                if not same_instant(self.jobs.instant(job), current['run_at']):
-                    current['status'] = 'holding'
-                    current['revision'] += 1
-                    self.store.save(current)
-                    raise WorkflowConflict('native cron was edited directly; reconcile before rescheduling')
+                for component in components:
+                    job = self.jobs.get(component)
+                    if not job or job.get('last_run_at') or job.get('state') != 'scheduled' or job.get('fire_claim') or job.get('run_claim'):
+                        raise WorkflowConflict('native job is firing, paused or terminal')
+                    expected = current['notification_run_at'] if component == current.get('notification_job_id') else current['run_at']
+                    if not same_instant(self.jobs.instant(job), expected):
+                        raise WorkflowConflict('native cron was edited directly; reconcile before rescheduling')
                 if not time.time() < target < current['deadline']:
                     raise ValueError('schedule falls outside the request deadline')
                 current['status'] = 'holding'
                 current['revision'] += 1
                 current['schedule_change'] = {'request_id': op, 'requested_run_at': target,
-                                              'previous_run_at': current['run_at'], 'status': 'pending'}
+                                              'previous_run_at': current['run_at'], 'status': 'pending',
+                                              'components': components}
                 self.store.save(current)
-            after = self.jobs.move(current['cron_job_id'], target)
-            if not after or not same_instant(self.jobs.instant(after), target):
-                raise WorkflowConflict('schedule modification is unresolved; execution remains held')
+            for component in components:
+                after = self.jobs.move(component, target)
+                if not after or not same_instant(self.jobs.instant(after), target):
+                    raise WorkflowConflict('schedule modification is unresolved; execution remains held')
             with self.store.lock, self.store.db:
                 current = self.store.get(key)
                 if current['status'] != 'holding' or current['revision'] != args['expected_revision'] + 1:
                     raise WorkflowConflict('request changed during the native schedule move')
-                current['run_at'], current['status'] = self.jobs.instant(after), 'scheduled'
+                current['run_at'], current['status'] = target, 'scheduled'
+                if current.get('notification_job_id') in components:
+                    current['notification_run_at'] = target
                 current['automatic_hours'] = False  # This move is an explicit owner instruction.
                 current['schedule_change']['status'] = 'applied'
                 current['verification'] = {'verified': True, 'status': 'applied', 'requested_run_at': target,
@@ -429,26 +564,131 @@ class PhoneWorkflows:
                                            'timezone': current['timezone']}
                 self.store.save(current)
             return self.receipt(current)
-        result = self.jobs.fenced(row['cron_job_id'], change)
+        result = self.fenced_all(components, change)
         if not isinstance(result, dict):
             raise WorkflowConflict('native firing fence unavailable')
         self.store.finish_operation(op, result)
         return result
 
-    def cancel(self, key):
+    def cancel(self, key, *, cascade=True):
         row = self.store.get(key)
         self.authorize(row, result=True)
-        if row['status'] == 'cancelled':
-            return {'ok': True, 'callback': self.store.public(row), 'active_call_ended': False}
         # Cancellation fences future decisions even if the current call is active.
         with self.store.lock, self.store.db:
             row = self.store.get(key)
             row['status'] = 'cancelled'
             row['revision'] += 1
             self.store.save(row)
-        if row.get('cron_job_id'):
-            self.jobs.fenced(row['cron_job_id'], lambda: self.jobs.pause(row['cron_job_id']))
-        return {'ok': True, 'callback': self.store.public(row), 'active_call_ended': False}
+        errors = {}
+        for component in self.pending_components(row):
+            try:
+                paused = self.jobs.fenced(component, lambda: self.jobs.pause(component))
+                if not paused:
+                    errors[component] = 'Native job is firing or its fence is unavailable; request is revoked'
+            except Exception as exc:
+                errors[component] = str(exc)
+        if cascade:
+            root = row.get('root_request_id', key)
+            for peer in self.store.rows():
+                if peer['id'] != key and peer.get('root_request_id', peer['id']) == root and peer['status'] != 'cancelled':
+                    try:
+                        result = self.cancel(peer['id'], cascade=False)
+                        errors.update(result.get('component_errors', {}))
+                    except Exception as exc:
+                        errors[peer['id']] = str(exc)
+        with self.store.lock, self.store.db:
+            row = self.store.get(key)
+            row['component_errors'] = errors
+            self.store.save(row)
+        return {'ok': not errors, 'callback': self.public(row), 'active_call_ended': False,
+                'component_errors': errors}
+
+    def request_callback(self, key, body):
+        """Save a recipient-requested continuation of the active, authorized call."""
+        from .reminders import due_time
+        from .phone_cli import control
+        if set(body) != {'attempt_id', 'execution_id', 'call_id', 'request_id', 'time'}:
+            raise ValueError('invalid callback request envelope')
+        timing = body['time']
+        if not isinstance(timing, dict) or set(timing) - {'delay_minutes', 'delay_seconds', 'run_at'}:
+            raise ValueError('callback accepts only a requested time')
+        validate_request_id(body['request_id'])
+        self.daemon_authority(key, body['attempt_id'], body['execution_id'])
+        state = control('/v1/phone/workflow-outcome/' + body['attempt_id'])
+        if not state.get('active') or state.get('call_id') != body['call_id'] or state.get('finished'):
+            raise PermissionError('callback request does not belong to an active physical call')
+        op = 'recipient-' + hashlib.sha256(json.dumps([key, body['attempt_id'], body['request_id']]).encode()).hexdigest()[:40]
+        previous = self.store.begin_operation(op, {'parent': key, **body})
+        if previous is not None:
+            return previous
+        target = due_time(timing)
+        with self.store.lock, self.store.db:
+            row = self.store.get(key)
+            self.authorize(row)
+            attempt = next(a for a in row['attempts'] if a['id'] == body['attempt_id'])
+            root_id = row.get('root_request_id', key)
+            root = row if root_id == key else self.store.get(root_id)
+            if root['status'] == 'cancelled':
+                raise PermissionError('callback chain is cancelled')
+            existing = attempt.get('requested_callback_id')
+            attempt['callback_request'] = {'operation': op, 'run_at': target}
+            if existing:
+                child = self.store.get(existing)
+            else:
+                # Persist the pointer in the same SQLite commit as child creation.
+                attempt['requested_callback_id'] = 'cb-' + op
+                self.store.save(row)
+                child = self.store.create(request_id=op, number=row['number'], purpose=row['purpose'],
+                    run_at=target, authority=row['authority'], timezone_name=row['timezone'],
+                    deadline=row['deadline'], delivery_plan=row.get('delivery_plan'),
+                    kind=row.get('kind', 'objective'), retry_delays=root.get('retry_delays_minutes', self.bridge.config.callback_retry_delays),
+                    root_request_id=root_id, origin_session=row.get('origin_session'))
+            self.store.save(row)
+        if existing:
+            saved = self.reschedule({'callback_id': child['id'], 'request_id': op+'-move',
+                'expected_revision': child['revision'], 'run_at': datetime.fromtimestamp(target, timezone.utc).isoformat()})
+        else:
+            saved = self.publish(child)
+        if not saved.get('ok'):
+            raise WorkflowConflict('callback schedule remains unverified')
+        return self.finish_callback_request(self.store.get(child['id']), attempt['callback_request'])
+
+    def finish_callback_request(self, child, change):
+        self.authorize(child)
+        if child['status'] != 'scheduled' or not same_instant(child['run_at'], change['run_at']):
+            raise WorkflowConflict('requested callback time is not verified')
+        result = {**self.receipt(child), 'status': 'ok', 'message': "I'll call you again on "
+            + local_time(child['run_at'], child['timezone']) + '.'}
+        # Claim external delivery before sending; a crash may leave an uncertain
+        # receipt, but cannot generate a second gateway confirmation.
+        self.store.finish_operation(change['operation'], result)
+        self.callback_confirmation(child['id'], change['operation'], 'Callback set for '
+            + local_time(child['run_at'], child['timezone']) + ': ' + subject(child['purpose']) + '.')
+        return result
+
+    def callback_confirmation(self, key, operation, message):
+        with self.store.lock, self.store.db:
+            row = self.store.get(key)
+            destination = (row.get('delivery_plan') or {}).get('gateway')
+            claims = row.get('confirmation_operations', [])
+            if not destination or operation in claims:
+                return
+            row['confirmation_operations'] = [*claims, operation]
+            row['confirmation_delivery'] = 'uncertain'
+            self.store.save(row)
+        try:
+            from .hermes_compat import validate_gateway_destination
+            from tools.send_message_tool import send_message_tool
+            from contextlib import nullcontext
+            with self.jobs.scope() if isinstance(self.jobs, NativePhoneJobs) else nullcontext():
+                validate_gateway_destination(destination)
+                sent = json.loads(send_message_tool({'action': 'send', 'target': destination['deliver'], 'message': message}))
+            with self.store.lock, self.store.db:
+                row = self.store.get(key)
+                row['confirmation_delivery'] = 'sent' if sent.get('success') else 'unconfirmed'
+                self.store.save(row)
+        except Exception:
+            pass  # An uncertain external send is never retried by custom code.
 
     def decision_authority(self, session_id, run_id=None):
         for row in self.store.rows():
@@ -493,18 +733,31 @@ class PhoneWorkflows:
             if action == 'retry':
                 if disposition not in {'incomplete', 'deferred'} or outcome.get('uncertain') or outcome.get('still_active'):
                     raise ValueError('uncertain, declined, completed or still-active calls cannot be retried')
-                if len(row['attempts']) >= row['max_attempts']:
+                root_id = row.get('root_request_id', row['id'])
+                root = row if root_id == row['id'] else self.store.get(root_id)
+                automatic = disposition != 'deferred' and not args.get('owner_instruction_quote')
+                delays = root.get('retry_delays_minutes', [])
+                used = root.get('automatic_retries_used', 0)
+                if ((row.get('schema_version') != 2 and len(row['attempts']) >= row['max_attempts'])
+                        or (row.get('schema_version') == 2 and automatic and used >= len(delays))):
                     raise ValueError('attempt limit reached; request owner guidance')
                 if disposition == 'deferred' and (not caller_evidence.intersection(evidence) or not args.get('run_at')):
                     raise ValueError('recipient deferral requires an evidenced specific time')
                 owner_quote = args.get('owner_instruction_quote')
                 if owner_quote and (not isinstance(owner_quote, str) or owner_quote not in row['purpose'] or not args.get('run_at')):
                     raise ValueError('explicit owner timing requires the original instruction quote and exact time')
-                target = retry_time(row, parse_time(args['run_at']) if args.get('run_at') else None,
+                requested = parse_time(args['run_at']) if args.get('run_at') else None
+                if requested is None and automatic and row.get('schema_version') == 2:
+                    requested = max((outcome.get('ended_at') or time.time()) + delays[used] * 60, time.time() + 5)
+                target = retry_time(row, requested,
                                     explicit_recipient_time=disposition == 'deferred' and bool(evidence),
                                     explicit_owner_time=bool(owner_quote))
                 row['run_at'], row['status'] = target, 'holding'
                 row['automatic_hours'] = disposition != 'deferred' and not bool(owner_quote)
+                if automatic and row.get('schema_version') == 2:
+                    root['automatic_retries_used'] = used + 1
+                    if root is not row:
+                        self.store.save(root)
             elif action == 'close':
                 if disposition not in {'completed', 'declined'}:
                     raise ValueError('only completion or refusal can close this request')
@@ -539,7 +792,7 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
         self.reconcile_schedules()
         for row in self.store.rows():
             for attempt in row['attempts']:
-                if attempt['status'] in {'admitted', 'observing', 'deciding'} or (attempt['status'] == 'decided' and not attempt.get('report')):
+                if attempt['status'] in {'admitted', 'observing', 'deciding'} or (attempt['status'] == 'decided' and not attempt.get('report_ready', bool(attempt.get('report')))):
                     self.workers[attempt['id']] = asyncio.create_task(self.run(row['id'], attempt['id'], recover=True))
                 elif attempt.get('report') and not attempt.get('report_claimed'):
                     self.recover_report(row, attempt)
@@ -571,16 +824,24 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
                 self.authorize(row)
                 change = row.get('schedule_change')
                 if change and change['status'] == 'pending':
+                    components = change.get('components', [row['cron_job_id']])
                     def reconcile_move():
-                        job = self.jobs.get(row['cron_job_id'])
-                        if (not job or job.get('last_run_at') or job.get('state') != 'scheduled'
-                                or not same_instant(self.jobs.instant(job), change['requested_run_at'])):
-                            return
+                        for component in components:
+                            job = self.jobs.get(component)
+                            if (not job or job.get('last_run_at') or job.get('state') != 'scheduled'
+                                    or job.get('fire_claim') or job.get('run_claim')):
+                                return
+                            if not same_instant(self.jobs.instant(job), change['requested_run_at']):
+                                job = self.jobs.move(component, change['requested_run_at'])
+                                if not job or not same_instant(self.jobs.instant(job), change['requested_run_at']):
+                                    return
                         with self.store.lock, self.store.db:
                             current = self.store.get(row['id'])
                             if current['status'] != 'holding':
                                 return
-                            current['run_at'], current['status'] = self.jobs.instant(job), 'scheduled'
+                            current['run_at'], current['status'] = change['requested_run_at'], 'scheduled'
+                            if current.get('notification_job_id') in components:
+                                current['notification_run_at'] = change['requested_run_at']
                             current['automatic_hours'] = False
                             current['schedule_change']['status'] = 'applied'
                             current['verification'] = {'verified': True, 'status': 'applied',
@@ -588,16 +849,27 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
                                 'reminder_run_at': current['run_at'], 'timezone': current['timezone']}
                             self.store.save(current)
                         self.store.finish_operation(change['request_id'], self.receipt(current))
-                    self.jobs.fenced(row['cron_job_id'], reconcile_move)
-                elif len(row['attempts']) < row['max_attempts'] and time.time() < row['run_at']:
+                    self.fenced_all(components, reconcile_move)
+                elif (row.get('schema_version') == 2 or len(row['attempts']) < row['max_attempts']) and time.time() < row['run_at']:
                     receipt = self.publish(row)
-                    if row.get('last_decision'):
+                    if (row.get('last_decision') or {}).get('request_id'):
                         self.store.finish_operation(row['last_decision']['request_id'], receipt)
             except Exception:
                 # An uncertain external write is retained, never replaced or dialled locally.
                 continue
+        for parent in self.store.rows():
+            for attempt in parent['attempts']:
+                if attempt.get('callback_request') and attempt.get('requested_callback_id'):
+                    try:
+                        self.finish_callback_request(self.store.get(attempt['requested_callback_id']), attempt['callback_request'])
+                    except Exception:
+                        continue
 
     def recover_report(self, row, attempt):
+        if attempt.get('report_ready') and not attempt.get('report'):
+            return
+        if row.get('delivery_plan', {}).get('mode') == 'call':
+            return  # The report remains available through phone status, with no external delivery.
         if attempt.get('report_claimed'):
             return
         try:
@@ -667,6 +939,29 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
         elif attempt.get('fire_owner') and (job.get('fire_claim') or {}).get('by') != attempt['fire_owner']:
             raise PermissionError('native firing ownership changed')
         return row, attempt, created
+
+    def notification(self, key, job_id, execution_id):
+        from .hermes_compat import validate_gateway_destination
+        with self.store.lock, self.store.db:
+            row = self.store.get(key)
+            self.authorize(row, result=True)
+            if (row['status'] in {'holding', 'cancelled', 'expired'} or time.time() >= row['deadline']
+                    or job_id != row.get('notification_job_id')):
+                raise PermissionError('reminder is held, cancelled, expired or outside this request')
+            job, execution = self.jobs.execution(job_id, execution_id)
+            marker = 'hfp-reminder-' + hashlib.sha256(key.encode()).hexdigest() + '.py'
+            if (job.get('script') != marker or not execution.get('scheduled_instant')
+                    or not same_instant(parse_time(execution['scheduled_instant']), row['notification_run_at'])
+                    or not same_instant(self.jobs.instant(job), row['notification_run_at'])):
+                raise PermissionError('native reminder identity or occurrence changed')
+            if row.get('notification_claimed'):
+                return {'ready': True, 'report': '', 'delivery': 'uncertain_or_already_claimed'}
+            validate_gateway_destination(row['delivery_plan']['gateway'])
+            row['notification_claimed'] = True
+            row['notification_execution_id'] = execution_id
+            self.store.save(row)
+            text = subject(row['purpose'])
+            return {'ready': True, 'report': 'Reminder: ' + text[:1].upper() + text[1:] + '.'}
 
     def execute(self, key, job_id, execution_id, observation_seconds=1800):
         import asyncio
@@ -754,6 +1049,71 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
                 row['revision'] += 1
                 self.store.save(row)
 
+    def routine_decision(self, key, attempt_id):
+        """Handle transport outcomes and reminders without another model run."""
+        with self.store.lock, self.store.db:
+            row = self.store.get(key)
+            if row.get('schema_version') != 2:
+                return False
+            attempt = next(a for a in row['attempts'] if a['id'] == attempt_id)
+            if attempt.get('decision'):
+                retry = row['status'] == 'holding' and attempt['decision']['action'] == 'retry'
+            else:
+                outcome = attempt['outcome']
+                requested = attempt.get('requested_callback_id')
+                missed = (outcome['connection_state'] == 'not_connected'
+                          and outcome.get('termination_reason') in {'busy', 'no_answer', 'answer_timeout_cancelled'})
+                if not requested and not missed and not outcome.get('uncertain') and not outcome.get('still_active') and row.get('kind') != 'reminder':
+                    return False
+                root_id = row.get('root_request_id', key)
+                root = row if root_id == key else self.store.get(root_id)
+                used = root.get('automatic_retries_used', 0)
+                delays = root.get('retry_delays_minutes', row['retry_delays_minutes'])
+                retry = False
+                action, disposition, reason = 'close', 'completed', 'Call attempt finished; hearing is not confirmed.'
+                if requested:
+                    child = self.store.get(requested)
+                    action, disposition = 'close', 'deferred'
+                    row['status'] = 'completed' if child['status'] == 'scheduled' else 'needs_guidance'
+                    reason = 'Caller-requested callback saved.' if child['status'] == 'scheduled' else 'Requested callback is not verified.'
+                elif root['status'] == 'cancelled':
+                    row['status'] = 'cancelled'
+                    action, disposition, reason = 'close', 'cancelled', 'Request cancelled.'
+                elif outcome.get('uncertain') or outcome.get('still_active'):
+                    row['status'] = 'uncertain'
+                    action, disposition, reason = 'ask_owner', 'uncertain', 'Call execution is uncertain; no automatic retry.'
+                elif missed and used < len(delays):
+                    ended_at = outcome.get('ended_at') or time.time()
+                    target = max(ended_at + delays[used] * 60, time.time() + 5)
+                    try:
+                        target = retry_time(row, target)
+                    except ValueError:
+                        row['status'] = 'expired'
+                        action, disposition, reason = 'close', 'expired', 'Retry falls outside the original deadline.'
+                    else:
+                        root['automatic_retries_used'] = used + 1
+                        if root is not row:
+                            self.store.save(root)
+                        row.update(run_at=target, status='holding', automatic_hours=True)
+                        action, disposition, reason = 'retry', 'incomplete', 'Confirmed missed call; next configured native attempt.'
+                        retry = True
+                elif missed:
+                    row['status'] = 'exhausted'
+                    action, disposition, reason = 'close', 'exhausted', 'Configured missed-call retries exhausted.'
+                elif outcome['connection_state'] == 'connected':
+                    row.update(status='completed', delivery_status='call_finished_not_confirmed_heard')
+                else:
+                    row['status'] = 'needs_guidance'
+                    action, disposition, reason = 'ask_owner', 'incomplete', 'Call was not completed; no automatic retry for this outcome.'
+                attempt['decision'] = row['last_decision'] = {
+                    'action': action, 'disposition': disposition, 'reason': reason, 'source': 'programmed_policy'}
+                attempt['status'] = 'decided'
+                row['revision'] += 1
+                self.store.save(row)
+        if retry:
+            self.publish(row)
+        return True
+
     async def run(self, key, attempt_id, *, recover=False):
         import asyncio
         from .phone_cli import control
@@ -789,6 +1149,12 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
             if row['status'] == 'cancelled':
                 raise PermissionError('request cancelled; no further decision allowed')
             self.authorize(row)
+            if self.routine_decision(key, attempt_id):
+                self.finish_report(key, attempt_id)
+                if recover:
+                    current = self.store.get(key)
+                    self.recover_report(current, next(a for a in current['attempts'] if a['id'] == attempt_id))
+                return
             if not attempt.get('decision_deadline'):
                 row, attempt = self.store.update_attempt(key, attempt_id, status='deciding', decision_deadline=time.time() + 120)
             elif time.time() >= attempt['decision_deadline']:
@@ -868,8 +1234,32 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
                 text += ' No automatic retry is authorized; please provide guidance.'
             elif row['status'] == 'cancelled':
                 text += ' Request cancelled; no further attempts.'
-            attempt['report'] = text
+            attempt['diagnostic_report'] = text
+            attempt['report'] = self.user_report(row, attempt)
+            attempt['report_ready'] = True
+            if not attempt['report']:
+                attempt['report_claimed'] = True
             self.store.save(row)
+
+    def user_report(self, row, attempt):
+        if row['status'] == 'scheduled':
+            return ''  # Automatic retries are scheduling events, not user notifications.
+        if row['status'] in {'completed', 'declined', 'cancelled'}:
+            return ''
+        if row['status'] == 'exhausted':
+            root = row.get('root_request_id', row['id'])
+            count = sum(1 for r in self.store.rows() if r.get('root_request_id', r['id']) == root
+                        for a in r['attempts'] if (a.get('outcome') or {}).get('connection_state') == 'not_connected')
+            return f"I couldn't reach you after {count} attempts. No more calls are scheduled."
+        if row['status'] == 'expired':
+            return "The callback's time limit has passed. No more calls are scheduled."
+        root = row.get('root_request_id', row['id'])
+        chain = [r for r in self.store.rows() if r.get('root_request_id', r['id']) == root]
+        if any(r['status'] == 'scheduled' for r in chain):
+            return ''
+        if any(r['status'] == 'holding' for r in chain):
+            return "I couldn't confirm the callback schedule. Please check its status before trying again."
+        return "I couldn't confirm what happened on the call, so I haven't scheduled another."
 
     def report(self, key, attempt_id, execution_id):
         with self.store.lock, self.store.db:
@@ -888,10 +1278,24 @@ class GatewayPhoneWorkflows(PhoneWorkflows):
                 raise PermissionError('report execution mismatch')
             # Authority is checked again before an asynchronous result leaves its profile.
             self.authorize(row, result=True)
-            if not attempt.get('report'):
+            if not attempt.get('report_ready', bool(attempt.get('report'))):
                 return {'ready': False}
+            if not attempt.get('report'):
+                return {'ready': True, 'report': '', 'delivery': 'suppressed'}
+            if row.get('delivery_plan', {}).get('mode') == 'call':
+                return {'ready': True, 'report': '', 'delivery': 'local'}
+            if row.get('delivery_plan', {}).get('notify_at_due') and attempt['execution_id'] == execution_id:
+                # The call executor is local-only. Native recovery delivers its retained
+                # outcome from a separate report job, independent of phone execution.
+                return {'ready': True, 'report': '', 'delivery': 'separate_report_job'}
+            if row.get('delivery_plan', {}).get('gateway'):
+                from .hermes_compat import validate_gateway_destination
+                validate_gateway_destination(row['delivery_plan']['gateway'])
             if attempt['report_claimed']:
                 return {'ready': True, 'report': '', 'delivery': 'uncertain_or_already_claimed'}
             attempt['report_claimed'] = True
             self.store.save(row)
-            return {'ready': True, 'report': attempt['report']}
+            report = attempt['report']
+            if report.startswith('Phone request:'):
+                report = self.user_report(row, attempt)
+            return {'ready': True, 'report': report}

@@ -50,6 +50,13 @@ preserve existing notes and transcripts.
 
 Phone objectives require Hermes native one-shot `no_agent` scripts, private profile `scripts/`, durable cron execution identities and firing fences, plus native Runs API sessions and idempotent admission. Missing capabilities leave requests unverified; there is no daemon-timer fallback. The isolated compatibility check exercises native phone job creation, revision-safe moves and cancellation without dialing or delivering messages.
 
+Configurable reminder delivery also uses Hermes's native default home-destination
+resolver and configured delivery-target discovery. The compatibility adapter
+isolates these internal APIs. The isolated check covers a non-Telegram destination,
+linked notification/callback moves and durable notification claims. Call-only
+reminders need no gateway; notification jobs retain native delivery receipts and
+show failures through phone status. Existing scheduled jobs are not rewritten.
+
 See [the dated workflow evidence](hermes-owner-flow-verification-2026-10-08.md)
 for the tested installation and pending real-call scenarios. A package version
 alone does not identify a working-tree build; record its artifact digest and the

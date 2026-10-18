@@ -12,7 +12,8 @@ from tests.test_phone_routing import routing_data
 @pytest.mark.parametrize('transition', ['reconnect', 'reset'])
 async def test_call_setup_does_not_trigger_greeting(direction, transition):
     async def ok(*_): return {'ok': True}
-    manager = gemini_live.GeminiLiveManager(ensure_stream=ok, clear_playback=ok, hangup=ok)
+    manager = gemini_live.GeminiLiveManager(ensure_stream=ok, clear_playback=ok, hangup=ok,
+        call_direction=direction, call_purpose='Remind the recipient to start recording a video.')
     manager._caller_spoke = True
     sent, configs = [], []
     class Session:
@@ -43,10 +44,12 @@ async def test_call_setup_does_not_trigger_greeting(direction, transition):
     assert len(configs) == 2
     assert manager._caller_spoke  # physical-call evidence survives reconnect/reset
     assert not sent
-    assert all('wait for the caller or recipient to speak first' in config['system_instruction']
+    assert all(('OUTGOING call' if direction == 'outgoing' else 'INCOMING call') in config['system_instruction']
                for config in configs)
-    assert all('after the recipient\'s hello, introduce yourself' in config['system_instruction']
-               for config in configs)
+    assert 'SAME physical call' in configs[1]['system_instruction']
+    if direction == 'outgoing':
+        assert all('start recording a video' in c['system_instruction'] for c in configs)
+        assert 'FIRST substantive reply must immediately explain why you called' in configs[0]['system_instruction']
 
 
 @pytest.mark.parametrize('admin,expected', [(True, True), (False, False)])

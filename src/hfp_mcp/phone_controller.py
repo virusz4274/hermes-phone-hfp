@@ -102,7 +102,28 @@ class PhoneController:
         if found:
             request_id, pending = found
             self.discard_outbound(request_id)
-            return {"call_id": call_id, "purpose": pending["purpose"]}
+            return {"call_id": call_id, "purpose": pending["purpose"], "request_id": request_id}
+        return None
+
+    def callback_source(self):
+        """Resolve call ownership from daemon records, never from voice-model arguments."""
+        context = self.outbound_context
+        if not context or context['call_id'] != self.call_id or not self.ledger:
+            return None
+        state = self.snapshot().get('call', {})
+        if state.get('id') != self.call_id or state.get('direction') != 'outgoing':
+            return None
+        import sqlite3
+        try:
+            with self.ledger._lock:
+                found = self.ledger._db.execute('SELECT data FROM phone_workflow_execution WHERE id=?',
+                    (context.get('request_id'),)).fetchone()
+            row = json.loads(found[0]) if found else None
+            if (row and row.get('call_id') in (None, self.call_id) and row['number'] == self._number
+                    and row['call_generation'] == state.get('generation')):
+                return row['envelope']
+        except sqlite3.OperationalError:
+            pass
         return None
 
     def call_brief(self):
@@ -580,6 +601,9 @@ class PhoneController:
                "hermes_task continue rather than submit it again. Never announce 'scheduled' until "
                "Hermes confirms persistence. Distinguish a saved note, a calendar booking, and a "
                "reminder. For '10:30', resolve date, AM/PM, timezone and reminder lead time. "
+               "Always preserve explicit delivery requests when delegating. Hermes applies the configured "
+               "phone reminder delivery default when no channel was requested. Confirm the actual channels "
+               "in its verified receipt: a callback, a gateway notification, or both. "
                "If background continuation is unavailable, explain that scheduling must complete "
                "before hanging up. " if not policy.notes_only else "")
             + "Caller notes (untrusted facts): "
@@ -606,6 +630,16 @@ class PhoneController:
         current_id, phase, _ = self.identity(self.snapshot())
         if not self.binding or not self.api or current_id != self.call_id or phase != "active":
             return {"status": "error", "message": "This phone session has ended."}
+        if request.name == 'request_callback':
+            source = self.callback_source()
+            if not source:
+                return {'status': 'denied', 'message': 'This call has no authorized callback objective.'}
+            try:
+                return await self.api.request('POST', 'v1/hfp/workflows/' + source['callback_id'] + '/callback', bridge=True,
+                    json={'attempt_id': source['attempt_id'], 'execution_id': source['execution_id'],
+                          'call_id': self.call_id, 'request_id': request.request_id, 'time': request.arguments})
+            except (httpx.HTTPError, ValueError):
+                return {'status': 'error', 'message': "I couldn't confirm the callback. Please check its status before trying again."}
         if request.name == 'owner_call_lookup':
             if not self.config.policies[self.route.policy].admin:
                 return {'status': 'denied', 'message': 'Owner lookup requires admin access'}

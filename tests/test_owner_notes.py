@@ -117,6 +117,8 @@ def test_plugin_exposes_owner_notes_and_passes_full_call_brief(tmp_path, monkeyp
     try:
         from tests.test_phone_workflows import FakeJobs
         monkeypatch.setattr('hfp_mcp.reminders.telegram_destination', lambda: 'telegram')
+        monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: {
+            'platform': 'telegram', 'chat_id': 'home', 'thread_id': None, 'deliver': 'telegram:home'})
         hermes_bridge._BRIDGES[-1].workflows.jobs = FakeJobs()
         tool = registered["hfp_phone_start_call"]
         purpose = "മ" * 4000

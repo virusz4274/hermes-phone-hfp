@@ -69,6 +69,8 @@ class RoutingConfig:
     outbound: Route | None = None
     timezone: str = ""
     owner_access: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    reminder_delivery: str = "gateway"
+    callback_retry_delays: tuple[int, ...] = (10, 30, 60)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "RoutingConfig":
@@ -101,6 +103,18 @@ class RoutingConfig:
             return _bool(value, default)
 
         region = str(data.get("default_region", region)).upper()
+        reminders = data.get("reminders", {})
+        if not isinstance(reminders, dict) or set(reminders) - {"default_delivery"}:
+            raise ValueError("phone.reminders accepts only default_delivery")
+        reminder_delivery = reminders.get("default_delivery", "gateway")
+        if reminder_delivery not in ("gateway", "call", "both"):
+            raise ValueError("phone.reminders.default_delivery must be gateway, call or both")
+        callbacks = data.get('callbacks', {})
+        if not isinstance(callbacks, dict) or set(callbacks) - {'retry_delays_minutes'}:
+            raise ValueError('phone.callbacks accepts only retry_delays_minutes')
+        delays = callbacks.get('retry_delays_minutes', [10, 30, 60])
+        if not isinstance(delays, list) or any(type(n) is not int or not 1 <= n <= 525600 for n in delays):
+            raise ValueError('phone.callbacks.retry_delays_minutes must be a list of positive integer minutes (at most one year each)')
         endpoints = {}
         for name, value in data.get("endpoints", {}).items():
             if not _NAME.fullmatch(name):
@@ -215,7 +229,7 @@ class RoutingConfig:
             blocked,
             boolean(data.get("auto_answer"), True),
             boolean(data.get("auto_reconnect"), False),
-            max_tasks, background_minutes, outbound, timezone, owner_access,
+            max_tasks, background_minutes, outbound, timezone, owner_access, reminder_delivery, tuple(delays),
         )
 
     def resolve_outbound(self, number: str) -> tuple[Route | None, str]:

@@ -308,15 +308,51 @@ behavior. The default is `spoken`. Incoming behavior is unaffected. Startup
 hangup protection remains active, so the opening itself and retained dialogue
 cannot authorize ending a new call before current caller speech.
 
-For a text reminder, `hfp_phone_schedule_reminder` creates a native Hermes cron
-job delivered to the configured Telegram home channel, even when the request
-arrived through a phone/API session. It does not depend on Bluetooth. Both tools
+For all one-shot reminders requested during calls, use
+`hfp_phone_schedule_reminder`. Configure their default in the existing phone YAML:
+
+```yaml
+phone:
+  reminders:
+    default_delivery: both  # gateway | call | both
+  callbacks:
+    retry_delays_minutes: [10, 30, 60]  # [] disables automatic retries
+```
+
+`gateway` sends a notification, `call` calls the authenticated original caller,
+and `both` does both at the requested time. An omitted setting preserves
+gateway-only reminders. The tool's optional `delivery` overrides the default
+only for an explicit delivery request. Reminders from ordinary owner chats keep
+their gateway default; callbacks from chat require a destination `number`.
+Always confirm the actual channels from a verified receipt.
+
+Gateway delivery uses the originating Hermes profile's native default home
+destination, including its thread/topic. It is not tied to Telegram and does not
+broadcast when several platforms are configured. Configure the home destination
+in Hermes; no platform or chat ID is needed in the phone YAML. The destination is
+resolved and saved when scheduling, so a later default change does not redirect
+an existing reminder. An unavailable destination prevents scheduling a gateway
+component; it never silently changes the delivery mode.
+
+Call-only reminders require no messaging gateway and send no gateway completion
+or outcome messages. Their authorization and outcomes remain visible in
+`hfp_phone_status`. Saving an authorized reminder can continue after hangup without
+requiring Telegram. Gateway-only reminders do not depend on Bluetooth.
+
+Both-mode reminders link an initial notification job and a callback. Cancellation
+and rescheduling through the phone tools apply to both pending components; partial
+failures remain visible, and uncertain changes hold execution. The notification
+is sent once for the original occurrence, not again on automatic call retries.
+Call outcomes are reported separately through the saved gateway; a gateway failure
+does not prevent the callback. Existing scheduled jobs retain their old behavior.
+
+After changing the YAML, restart the affected Hermes gateway and
+`systemctl --user restart hfp-mcp.service`. Both scheduling tools
 accept exactly one of `delay_minutes`, `delay_seconds`, or an ISO-8601 `run_at`
 with a timezone offset. Resolve date, AM/PM, timezone, and reminder lead time
 before scheduling (for example, a 10:30 appointment with a 10-minute reminder
 needs a 10:20 schedule). Native cron polling and model execution may delay a
-Telegram message past the target time; it is not an exact-time alarm. The
-"card" is a Telegram reminder message, not a separate interactive card UI.
+gateway message or call past the target time; it is not an exact-time alarm.
 
 Live calls should submit scheduling and independent work with
 `continue_after_call=true` when the admin policy permits background tasks.
@@ -340,7 +376,8 @@ separate. Scheduling acceptance is not objective completion.
 Both old reminder ID/time fields refer to the same native call job. Stale
 revisions, executing attempts and unresolved writes cannot create another call.
 An uncertain result requires reconciliation or owner guidance. Ordinary text
-reminders remain managed by native `cronjob_manage`. Hermes owns downtime
+gateway-only reminders remain managed by native `cronjob_manage`. Linked
+notification jobs use the phone cancellation/rescheduling tools. Hermes owns downtime
 catch-up policy. Repeat creation with an identical stable request ID and exact
 time to retrieve the same workflow; never recreate an uncertain call.
 
@@ -634,16 +671,17 @@ The task remains pending until the follow-up finishes; it retains its original
 continuation permission and expiry. Previous run IDs and results are retained.
 Cancelled, interrupted, failed or unauthorized work does not start a follow-up.
 An uncertain follow-up admission is reported and never automatically resubmitted.
-Voice and Telegram completion notices must reflect the correction's result,
+Voice and gateway completion notices must reflect the correction's result,
 not the earlier outcome it was meant to change.
 
 To enable continuation for a known admin caller, set its policy's
-`background_tasks: true`. Configure that Hermes profile's existing Telegram home
-channel first. `phone.background_task_minutes` defaults to 30 minutes, measured
+`background_tasks: true`. Configure that Hermes profile's gateway home destination
+for external completion notices; call-only reminders require no gateway.
+`phone.background_task_minutes` defaults to 30 minutes, measured
 from designation to continue, and is not extended by later calls or status checks.
 Normal Hermes approvals remain in force. Substantial work can be designated from
 ordinary wording; no special background phrase or confirmation ritual is needed.
-The tool response must confirm the designation before voice promises Telegram.
+The tool response must confirm the designation before voice promises continuation.
 Use `hermes_task continue` to designate an already running task.
 
 The existing gateway observes native Runs and persists task IDs, session IDs,

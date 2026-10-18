@@ -102,7 +102,7 @@ class TaskRegistry:
 
     def public(self, row):
         return {k: row[k] for k in ('task_id', 'request_id', 'label', 'session_id', 'run_id', 'status', 'message',
-                'continue_after_call', 'expires_at', 'delivery', 'approval', 'pending_steer') if k in row}
+                'continue_after_call', 'expires_at', 'delivery', 'approval', 'pending_steer', 'schedule_receipts') if k in row}
 
     def schedule_receipt(self, run_id, receipt):
         """Retain observed tool outcomes for this attempt, without replaying work."""
@@ -114,7 +114,11 @@ class TaskRegistry:
             identity = receipt.get('callback_id') or receipt.get('reminder_job_id')
             receipts = [r for r in receipts if not (r['run_id'] == run_id and identity
                         and identity == (r.get('callback_id') or r.get('reminder_job_id')))]
-            self.update(row['task_id'], schedule_receipts=[*receipts, {**receipt, 'run_id': run_id}][-8:])
+            receipts = [*receipts, {**receipt, 'run_id': run_id}][-8:]
+            fields = {'schedule_receipts': receipts}
+            if row.get('continue_after_call') and row.get('delivery') in {'pending', 'suppressed'}:
+                fields['delivery'] = 'suppressed' if all(r.get('delivery') == 'call' for r in receipts) else 'pending'
+            self.update(row['task_id'], **fields)
 
     def authority(self, run_id):
         with self.store._lock:
@@ -190,13 +194,8 @@ class GatewayTasks:
     def continuation_allowed(self, binding):
         if not binding['policy'].get('admin') or not binding['policy'].get('background_tasks') or not binding['persistent']:
             raise PermissionError('continued tasks require the configured admin policy and a known caller')
-        # Validate the native configured destination before promising delivery.
-        from gateway.config import load_gateway_config, Platform
-        with self.adapter._profile_scope(self.bridge.profile):
-            cfg = load_gateway_config()
-            platform = cfg.platforms.get(Platform.TELEGRAM)
-            if not platform or not platform.enabled or not cfg.get_home_channel(Platform.TELEGRAM):
-                raise ValueError('Hermes Telegram home channel is not configured or enabled')
+        # Continuing authorized work and sending an external result are separate.
+        # A call-only reminder may finish saving after hangup without a messaging gateway.
 
     async def submit(self, body):
         async with self.admission_lock:
@@ -414,11 +413,10 @@ class GatewayTasks:
                     pending_steer=pending, completed_at=time.time())
                 receipts = [r for r in current.get('schedule_receipts', []) if r['run_id'] == row['run_id']]
                 if receipts:
-                    # Lead with observed state so notification truncation cannot
-                    # hide an unverified correction behind fluent model output.
+                    from .phone_messages import schedule_confirmation
                     verified = all(r.get('verified') is True for r in receipts)
-                    heading = 'Verified schedule outcome' if verified else 'Schedule change was not fully verified; inspect effective times before retrying'
-                    fields['message'] = heading + ': ' + json.dumps(receipts) + '\n' + fields['message']
+                    fields['diagnostic_message'] = fields['message']
+                    fields['message'] = schedule_confirmation(receipts)
                     if not verified and state['status'] == 'completed': fields['status'] = 'failed'
                 if pending:
                     fields.update(status='failed' if state['status'] == 'completed' else state['status'],
@@ -484,7 +482,7 @@ class GatewayTasks:
             if not target['continue_after_call']:
                 target = self.registry.update(target['task_id'], continue_after_call=True, delivery='pending',
                     expires_at=time.time()+self.bridge.config.background_task_minutes*60)
-            return {**self.registry.public(target), 'message': 'Authorized to continue after hangup until the stated expiry. Results will be sent through native Telegram.'}
+            return {**self.registry.public(target), 'message': 'Authorized to continue after hangup until the stated expiry. Results follow the effective notification policy.'}
         if action == 'steer':
             text = body.get('text')
             if not isinstance(text, str) or not text.strip() or len(text) > 8000: raise ValueError('invalid correction')
@@ -551,11 +549,21 @@ class GatewayTasks:
                 return {}
             from tools.send_message_tool import send_message_tool
             with self.adapter._profile_scope(self.bridge.profile):
+                from .hermes_compat import gateway_destination, validate_gateway_destination
+                receipts = current.get('schedule_receipts', [])
+                if receipts and all(r.get('delivery') == 'call' for r in receipts):
+                    self.registry.update(row['task_id'], delivery='suppressed')
+                    return {}
+                destination = next((r['destination'] for r in receipts if r.get('destination')), None)
+                destination = destination or gateway_destination()
+                validate_gateway_destination(destination)
                 # Output is plain result text. Requested attachments are sent by
                 # Hermes's native hermes send command during the task itself.
-                message = f"{row['label']} [{row['status']}]\n{row.get('message', '')}"
+                message = current.get('message', '')
+                if current['status'] in {'failed', 'uncertain', 'interrupted'} and not receipts:
+                    message = "I couldn't finish this task. Please check its status before trying again."
                 message = message.replace('MEDIA:', 'Media path:').replace('[[as_document]]', '')[:3800]
-                return json.loads(send_message_tool({'action': 'send', 'target': 'telegram', 'message': message}))
+                return json.loads(send_message_tool({'action': 'send', 'target': destination['deliver'], 'message': message}))
         try:
             result = await asyncio.to_thread(send)
             if result.get('success'):

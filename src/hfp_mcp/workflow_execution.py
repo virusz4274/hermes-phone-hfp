@@ -125,6 +125,8 @@ class WorkflowExecution:
             reason = 'answer_timeout_cancelled'
         elif not ended and code:
             reason = code
+        if ended and not connected and not uncertain and reason == 'disconnected':
+            reason = 'no_answer'
         evidence, actions = [], []
         if row['call_id']:
             page = ledger.transcript(row['call_id'], limit=100)
@@ -150,7 +152,7 @@ class WorkflowExecution:
                    'termination_reason': reason, 'uncertain': uncertain, 'still_active': bool(active),
                    'call_id': row['call_id'], 'call_generation': row['call_generation'],
                    'profile': row['profile'], 'attempt_id': key, 'started_at': row['started_at'],
-                   'ended_at': ended[1] if ended else None, 'evidence': evidence, 'verified_actions': actions}
+                   'ended_at': ended[1] if ended else time.time(), 'evidence': evidence, 'verified_actions': actions}
         if row['call_id']:
             outcome['evidence_truncated'] = bool(page['has_more'] or budget <= 0)
         if ended or not uncertain:

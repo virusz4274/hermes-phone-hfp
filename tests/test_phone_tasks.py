@@ -56,6 +56,9 @@ def system(tmp_path, monkeypatch):
     manager.peers.append(manager)
     api.manager = manager
     monkeypatch.setattr('hfp_mcp.hermes_sessions.create', lambda *a: None)
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: {
+        'platform': 'slack', 'chat_id': 'home', 'thread_id': '42', 'deliver': 'slack:home:42'})
+    monkeypatch.setattr('hfp_mcp.hermes_compat.validate_gateway_destination', lambda _: None)
     monkeypatch.setattr(manager, 'continuation_allowed', lambda binding: None if binding['policy']['admin'] else (_ for _ in ()).throw(PermissionError()))
     yield manager, api, store, root
     store.close()
@@ -78,9 +81,35 @@ async def test_completion_leads_with_observed_schedule_receipt(system, verified)
     api.runs[row['run_id']].update(status='completed', output='Everything is done' + 'x' * 12000)
     result = await m.refresh(row)
     assert result['status'] == ('completed' if verified else 'failed')
-    assert '"requested_run_at": 200' in result['message'][:900]
+    assert 'requested_run_at' not in result['message'] and 'Everything is done' not in result['message']
     assert len(result['schedule_receipts']) == 1
-    assert 'not fully verified' in result['message'] if not verified else 'Verified schedule outcome' in result['message']
+    assert result['schedule_receipts'][-1]['requested_run_at'] == 200
+    assert "couldn't confirm" in result['message'] if not verified else "I'll remind you on" in result['message']
+
+
+@pytest.mark.parametrize('verified', [True, False])
+async def test_call_only_scheduling_continues_without_gateway_and_suppresses_completion(system, monkeypatch, verified):
+    m, api, store, root = system
+    def unavailable():
+        raise AssertionError('Call-only continuation must not resolve a gateway')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', unavailable)
+    # Exercise the real authorization check rather than the fixture shortcut.
+    GatewayTasks.continuation_allowed(m, store.binding('parent'))
+    row = await submit(m, 'call-only', continue_after_call=True)
+    m.registry.schedule_receipt(row['run_id'], {'callback_id': 'cb', 'verified': verified, 'delivery': 'call'})
+    api.runs[row['run_id']].update(status='completed', output='Callback saved')
+    completed = await m.refresh(m.registry.get(row['task_id']))
+    assert completed['delivery'] == 'suppressed'
+    assert completed['status'] == ('completed' if verified else 'failed')
+
+
+async def test_mixed_reminder_receipts_keep_requested_gateway_completion(system):
+    m, api, store, root = system
+    row = await submit(m, 'mixed', continue_after_call=True)
+    m.registry.schedule_receipt(row['run_id'], {'callback_id': 'call', 'verified': True, 'delivery': 'call'})
+    assert m.registry.get(row['task_id'])['delivery'] == 'suppressed'
+    m.registry.schedule_receipt(row['run_id'], {'reminder_job_id': 'gateway', 'verified': True, 'delivery': 'gateway'})
+    assert m.registry.get(row['task_id'])['delivery'] == 'pending'
 
 
 async def test_correction_completion_does_not_reuse_original_schedule_receipt(system):
@@ -95,8 +124,8 @@ async def test_correction_completion_does_not_reuse_original_schedule_receipt(sy
         'requested_run_at': 200, 'callback_run_at': 100})
     api.runs[follow['run_id']].update(status='completed', output='Moved successfully', pending_steer=None)
     result = await m.refresh(row)
-    assert result['status'] == 'failed' and result['message'].startswith('Schedule change was not fully verified')
-    assert '"requested_run_at": 200' in result['message']
+    assert result['status'] == 'failed' and "couldn't confirm" in result['message']
+    assert result['schedule_receipts'][-1]['requested_run_at'] == 200
 
 
 async def test_default_long_task_reuses_primary_overlap_lazy_and_capacity(system):
@@ -354,7 +383,7 @@ async def test_notification_timeout_no_resend_or_custom_transport(system, monkey
     await asyncio.sleep(1.1)
     await m.close()
     assert len(sent) == 1
-    assert sent[0]['target'] == 'telegram'
+    assert sent[0]['target'] == 'slack:home:42'
     assert 'MEDIA:' not in sent[0]['message']
     assert m.registry.get(one['task_id'])['delivery'] == 'uncertain'
     await m.start()

@@ -36,11 +36,12 @@ def test_cached_formats_are_bounded_and_do_not_need_tts():
 
 
 def test_cached_introduction_replaces_model_introduction_instruction():
-    plain = gemini_live._live_config('', None, set())['system_instruction']
-    cached = gemini_live._live_config('', None, set(), cached_spoken_opening=True)['system_instruction']
-    assert "after the recipient's hello, introduce yourself" in plain
-    assert "after the recipient's hello, introduce yourself" not in cached
-    assert 'without reintroducing yourself' in cached
+    plain = gemini_live._live_config('', None, set(), call_direction='outgoing')['system_instruction']
+    cached = gemini_live._live_config('', None, set(), call_direction='outgoing', cached_spoken_opening=True)['system_instruction']
+    assert 'Introduce yourself once' in plain
+    assert 'Introduce yourself once' not in cached
+    assert 'do not repeat that introduction' in cached
+    assert 'FIRST substantive reply must immediately explain why you called' in cached
 
 
 @asynccontextmanager
