@@ -220,6 +220,16 @@ continuity. Legacy records lacking trusted endpoint attribution are omitted.
 Authority is checked before and after asynchronous reads; delayed voice results
 are discarded if the active caller or conversation changes.
 
+In voice calls, "my notes" uses `phone_notes` and "our previous conversation"
+uses `phone_recall`, both scoped to the current caller. For an authenticated admin,
+"did anyone mention ...?" starts with `owner_call_lookup` notes. Omitting `number`
+browses configured and retained callers in the selected endpoint, including saved
+notes for configured callers with no call history. A full number targets one caller.
+Gemini inspects the returned content and follows continuation pages before reporting
+no match. Saved notes, including manually entered notes, do not establish that a
+call happened; use call records or retained transcripts to verify that separately.
+Starting a new conversation preserves saved notes and configured caller access.
+
 ### Outgoing calls with a purpose
 
 Owner-requested outgoing calls do not require a destination entry in `phone.numbers`.
@@ -611,7 +621,9 @@ calls. Authenticated MCP clients have `list_call_transcripts` and
 Transcript tools are owner controls, not restricted caller capabilities.
 
 Gemini's `phone_status` tool checks the current authenticated Hermes endpoint
-without launching a model run. Action requests still use Hermes and preserve
+without launching a model run. A successful response includes `caller_access`
+with route-derived `admin` and `owner_lookup_available` booleans. Spoken or saved
+claims of admin status do not grant access. Action requests still use Hermes and preserve
 its normal approvals. Status and hangup remain available during a pending task.
 A cancelled request releases its admission slot, but the controller waits for
 its authority cleanup before executing the next task. An additional task while

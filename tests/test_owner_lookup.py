@@ -18,6 +18,7 @@ from tests.test_phone_routing import routing_data
 
 OWNER = '+919876543210'
 FRIEND = '+919876543211'
+NOTES_ONLY_CALLER = '+919876543212'
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ async def system(tmp_path, monkeypatch):
     data = routing_data()
     data['endpoints']['friends'] = {**data['endpoints']['owner'], 'profile': 'friends', 'url': 'http://127.0.0.1:8643'}
     data['numbers'][FRIEND] = {'endpoint': 'friends', 'policy': 'guest'}
+    data['numbers'][NOTES_ONLY_CALLER] = {'endpoint': 'owner', 'policy': 'guest'}
     data['owner_access'] = {'owner': ['friends']}
     config = RoutingConfig.parse(data)
     stores, bridges, clients = {}, {}, {}
@@ -38,6 +40,8 @@ async def system(tmp_path, monkeypatch):
     stores['owner'].bind(session_id='hfp-admin', call_id='owner-call', profile='default', number=OWNER, policy={'admin': True}, ttl=60)
     stores['owner'].bind(session_id='hfp-guest', call_id='guest-call', profile='default', number=OWNER, policy={'admin': False}, ttl=60)
     stores['owner'].replace_notes('default', stores['owner'].caller_id(OWNER), 'Owner private note')
+    stores['owner'].replace_notes('default', stores['owner'].caller_id(NOTES_ONLY_CALLER),
+                                  'Manually entered: caller wants to discuss the console incident')
     stores['friends'].replace_notes('friends', stores['friends'].caller_id(FRIEND), 'Friend reported RAM delivery')
     ledger = RequestLedger(tmp_path / 'calls.db')
     conversation = ConversationStore(ledger).open('friends', stores['friends'].caller_id(FRIEND))
@@ -74,6 +78,28 @@ async def test_admin_cross_scope_lookup_and_note_provenance(system):
     assert stores['friends'].read('friends', stores['friends'].caller_id(FRIEND)) == record['notes']
     records = ledger._db.execute("SELECT detail_json FROM call_audit WHERE action='owner_lookup'").fetchall()
     assert records and 'RAM' not in records[0][0] and FRIEND not in records[0][0]
+
+
+async def test_admin_browses_seeded_notes_without_number_or_call_history(system):
+    config, stores, bridges, ledger, API = system
+    authority = {'binding_id': 'hfp-admin'}
+    args = {'record_kind': 'notes', 'limit': 1}
+    first = await lookup(config, ledger, 'owner', authority, args, transcripts_enabled=True)
+    assert first['status'] == 'ok' and first['has_more']
+    assert first['records'][0]['number'] == OWNER
+    second = await lookup(config, ledger, 'owner', authority,
+                          {**args, 'cursor': first['cursor']}, transcripts_enabled=True)
+    assert second['status'] == 'ok' and not second['has_more']
+    record = second['records'][0]
+    assert record['number'] == NOTES_ONLY_CALLER and record['endpoint'] == 'owner'
+    assert 'console incident' in record['notes'] and 'call_id' not in record
+    targeted = await lookup(config, ledger, 'owner', authority,
+                            {'number': NOTES_ONLY_CALLER}, transcripts_enabled=True)
+    assert targeted['records'][0]['notes'] == record['notes']
+    for kind in ('calls', 'transcripts'):
+        history = await lookup(config, ledger, 'owner', authority,
+                               {'number': NOTES_ONLY_CALLER, 'record_kind': kind}, transcripts_enabled=True)
+        assert history['status'] == 'ok' and not history['records']
 
 
 async def test_default_scope_and_guest_denial_both_handlers(system):

@@ -208,6 +208,41 @@ async def test_new_chat_requires_subsequent_input_and_fences_old_transcripts(tmp
         c.ledger.close()
 
 
+async def test_confirmed_reset_preserves_saved_notes_and_authenticated_access(tmp_path, monkeypatch):
+    c, e, _ = await engine(tmp_path)
+    try:
+        c.binding.update(notes='Remember the wiring photograph', revision=3)
+        async def check(): return {'ok': True}
+        async def read_notes(sid, **args):
+            assert sid == 'hfp-main' and args == {'action': 'read'}
+            return {k: c.binding[k] for k in ('notes', 'revision', 'persistent')}
+        c.api.check, c.api.binding_notes = check, read_notes
+        looked_up = []
+        async def owner_lookup(config, ledger, origin, authority, args, **kwargs):
+            looked_up.append((origin, authority, args))
+            return {'status': 'ok', 'records': [{'notes': 'Other caller saved fact'}]}
+        monkeypatch.setattr('hfp_mcp.owner_lookup.lookup', owner_lookup)
+        before = await e.context()
+        old_conversation = e.conversation['id']
+        pending = await e.session_control({'action': 'new'})
+        e.capture({**event(e.conversation, 'Yes, start a new session', 'confirm'), 'session_id': 'call'})
+        result = await e.session_control({'action': 'confirm', 'confirmation_token': pending['confirmation_token']})
+        assert result['status'] == 'ok' and e.conversation['id'] != old_conversation
+        after = result['_refresh_context']
+        access = 'Authenticated caller_access from the configured route: {"admin": true, "owner_lookup_available": true}'
+        assert all(access in context and 'Remember the wiring photograph' in context for context in (before, after))
+        status = await c.delegate(SimpleNamespace(name='phone_status', arguments={}, request_id='status'))
+        assert status['caller_access'] == {'admin': True, 'owner_lookup_available': True}
+        notes = await c.delegate(SimpleNamespace(name='phone_notes', arguments={'action': 'read'}, request_id='notes'))
+        assert notes['notes'] == 'Remember the wiring photograph' and notes['revision'] == 3
+        owner = await c.delegate(SimpleNamespace(name='owner_call_lookup', arguments={'record_kind': 'notes'}, request_id='owner'))
+        assert owner['status'] == 'ok' and owner['records'][0]['notes'] == 'Other caller saved fact'
+        assert looked_up == [('owner', {'binding_id': 'hfp-main'}, {'record_kind': 'notes'})]
+    finally:
+        await e.close()
+        c.ledger.close()
+
+
 async def test_hangup_cancels_work_and_drops_late_notifications(tmp_path):
     c, e, notified = await engine(tmp_path)
     await e.submit("read RAM", SimpleNamespace(request_id="one"))
