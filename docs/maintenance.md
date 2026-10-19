@@ -21,6 +21,14 @@ The Hermes installer automates the routing file path and starter YAML. Neither i
 
 Package installation can update dependencies. Plugin file backups do not roll back Python dependencies or OS packages; reinstall a chosen package revision separately if needed.
 
+## Editing configuration
+
+Keep caller routes and permissions in `~/.config/hfp-mcp/config.yaml`, and credentials/provider settings in `~/.config/hfp-mcp.env` and the selected Hermes profile's `.env`. Use the single [routing example](../setup/phone.example.yaml) and [environment example](../setup/hfp-mcp.env.example) as references; merge changes into your existing files.
+
+Keep optional environment settings commented out with their explanations so they remain easy to configure later. If a key is already active, edit it in place instead of adding a second assignment. Existing installations retain their environment files during updates; installers do not automatically refresh all comments or add every optional example. Copy missing commented options from the current example as needed, preserving active values and credentials. Keep private files at mode `0600` and [back them up](#backups) before editing.
+
+Comment-only edits need no service restart. After changing active values, restart the affected daemon/Hermes gateways when calls and background tasks are idle. Validate routing with `hfp-mcp route validate`, then use `hfp-mcp phone status` and `hfp-mcp doctor` to check readiness.
+
 ## Release branches and versions
 
 Use `main` for reviewed public previews and `development` for ongoing integration.

@@ -12,6 +12,14 @@ The daemon and phone plugin must read equivalent phone routing configuration. Th
 
 Each endpoint names an existing Hermes profile, API base URL, API-token environment variable, and a **different** phone-binding-token environment variable. Use random secrets of at least 32 characters. The bridge token is for daemon-to-plugin authorization and must not be exposed as an agent tool argument.
 
+`token_env: HFP_HERMES_API_KEY` means “read the value of `HFP_HERMES_API_KEY` from the environment.” The YAML holds the name; the private environment file holds the secret. `bridge_token_env` works the same way.
+
+The [environment example](../setup/hfp-mcp.env.example) groups daemon access, Bluetooth, Hermes credentials, Gemini and local retention settings. Optional variables remain commented out for future use. Uncomment only the options you need, use one active assignment per key, and keep secrets outside the routing YAML. See [editing configuration](maintenance.md#editing-configuration) when updating an existing installation.
+
+Use the [routing example](../setup/phone.example.yaml): admin is enabled, with optional known-caller and guest sections commented out. Prepare a restricted guest profile below before enabling those sections. Endpoint selects the Hermes profile, policy selects permissions, and numbers selects who receives them. Policy names such as `admin`, `known` and `guest` are labels; their settings define access.
+
+In the example, admin callers use personal tools with normal approvals, known callers get only their own saved notes, and guests get conversation without tools or saved notes. Additional caller types can use another named policy; they do not need a separate profile unless their Hermes configuration must differ.
+
 For a default-profile endpoint:
 
 ```dotenv
@@ -116,31 +124,45 @@ HFP_GUEST_API_KEY=<same-guest-api-secret>
 HFP_GUEST_BRIDGE_KEY=<same-guest-binding-secret>
 ```
 
-Keep both environment files at mode 0600. Merge the endpoint, policy and catch-all
-into the existing `phone` section of `~/.config/hfp-mcp/config.yaml`:
+Keep both environment files at mode 0600. The following snippets show each addition; the single [routing example](../setup/phone.example.yaml) provides the complete configuration. Merge these fragments **inside your existing `phone:` section**, preserving owner numbers and existing entries under `endpoints`, `policies` and `numbers`.
+
+First, add the restricted endpoint. Keep `personal` as the fallback endpoint for outgoing numbers without an incoming route:
 
 ```yaml
-# Inside phone:
+outbound_endpoint: personal
 endpoints:
   guest:
     profile: guest
     url: http://127.0.0.1:8643
     token_env: HFP_GUEST_API_KEY
     bridge_token_env: HFP_GUEST_BRIDGE_KEY
+```
+
+To admit a known caller with access to their own saved notes, add this policy and number route. Replace the sample number with the caller's real number:
+
+```yaml
+policies:
+  known:
+    tools: [hfp_caller_read, hfp_caller_update]
+numbers:
+  "+919876543211":
+    endpoint: guest
+    policy: known
+```
+
+To also answer unmatched/withheld callers, add the conversation-only guest policy and catch-all below. These callers receive no tools or saved notes. Leave `default` absent to decline them:
+
+```yaml
 policies:
   guest:
-    admin: false
-    tools: [hfp_caller_read, hfp_caller_update]
-    remember: true
-    max_minutes: 10
-# Optional catch-all, only after the endpoint/profile is ready:
+    tools: []
+    remember: false
 default:
   endpoint: guest
   policy: guest
-  voice: gemini_live
 ```
 
-These are merge fragments, not complete configurations; preserve your other policies and endpoints. No automatic contact-book import grants access. Duplicate normalized routes, blocked-and-routed numbers, unknown policy references and admin catch-all routes are errors.
+No automatic contact-book import grants access. Duplicate normalized routes, blocked-and-routed numbers, unknown policy references and admin catch-all routes are errors.
 
 Validate with `hfp-mcp route validate`. Start the separate gateway with
 `hermes -p guest gateway` (or install/start its profile-specific gateway service
@@ -161,8 +183,8 @@ The result in either direction is:
 
 The owner supplies the outgoing objective, but the recipient's route determines
 permissions. `outbound_endpoint` only selects the last-resort notes-only route;
-it never overrides a matching number or guest default. The guest policy above
-permits conversation and each caller's own notes. Calendar bookings require an
+it never overrides a matching number or guest default. The `known` policy above
+permits each caller's own notes; the `guest` policy permits conversation only. Calendar bookings require an
 explicitly enabled caller-aware capability that enforces which resources that
 caller may access. Adding a trusted contact does not require `admin: true`;
 prefer an exact route with only the capabilities that contact needs.

@@ -14,6 +14,8 @@ Turn your Hermes Agent into a virtual phone call assistant and office secretary 
 
 Use [Configuration and operations](docs/phone-routing.md) for caller profiles, voice and approvals, and [Maintenance](docs/maintenance.md) for updates, backups and manual removal.
 
+Use the single [routing example](setup/phone.example.yaml) for admin access and optional known-caller/guest routes. The [environment example](setup/hfp-mcp.env.example) keeps optional settings commented out with short explanations; enable only those you need.
+
 For rehearsal and video demonstrations, use the [manual feature checklist](docs/manual-feature-checklist.md) or its [browser version](docs/manual-feature-checklist.html) to record results and follow the suggested demo sequence.
 
 ## What gets installed
