@@ -28,7 +28,7 @@ jobs:
         run: bash -n setup/install.sh
 
   # Packaging smoke test for PRs to main and manual runs
-  packages:
+  package-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     if: >-
@@ -58,7 +58,3 @@ jobs:
               "$smoke_root/venv/bin/hfp-mcp" doctor --help
             )
           done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: python-distributions
-          path: dist/*
