@@ -8,15 +8,21 @@ to hand off the work. Requirement links below map every unfinished item; histori
 evidence is retained and superseded behavior is labeled. Code verification, deployment, live acceptance, and
 audio investigations have separate completion states.
 
-Reconciled 2026-10-09 against the working-tree native Hermes workflow. Checked
-items describe implemented mechanisms, not universal live acceptance. Unchecked
-items may have working code but unfinished dependencies or acceptance checks;
-use the YAML for that distinction. The 2026-09-29 audit (538 tests and isolated
-Hermes checks) and subsequent 70-test configuration check are historical.
+Reconciled 2026-10-25 against `development` at `708a44d`. The 2026-10-09
+checklist was stale about changes made since then: configurable reminder delivery
+and callback retries, revision-safe caller-note reconciliation, and explicit
+wait-for-confirmation handling are now implemented. Checked items describe
+implemented mechanisms, not universal live acceptance. Unchecked items may have
+working code but unfinished dependencies or acceptance checks; use the YAML for
+that distinction. The 2026-09-29 audit (538 tests and isolated Hermes checks) and
+subsequent 70-test configuration check are historical.
 The [8 October report](docs/hermes-owner-flow-verification-2026-10-08.md) records
 658 source/installed tests and coordinated deployment for the new workflow.
-Owner lookup and direct rescheduling are implemented. Inbox, explicit voice note
-management, and complete transcript handoff remain unfinished.
+Owner lookup and direct rescheduling are implemented. Basic owner note read and
+whole-note replacement/forget controls exist, and automatic after-call note
+reconciliation now supports targeted revisions. A dedicated owner voice workflow
+for selectively removing/consolidating facts, an inbox, and complete transcript
+handoff remain unfinished.
 
 ## Next improvements
 
@@ -42,11 +48,12 @@ Reuse native Hermes scheduling, task registries, notes, and delivery.
   new-flow live acceptance remain pending. The plugin executes calls; it does
   not own a future-dial timer.
 
-- [ ] [TASK-03](docs/implementation-spec.md#task-03) — **Clear hangup handling for unfinished work.** Validate the spoken
-  experience: explain that authorized work is still pending and where its result
-  will arrive; otherwise explain that hanging up stops the task. Honor a caller's
-  condition to wait for confirmation before ending the call. Continuation,
-  cancellation, and expiry are already implemented; reliable model selection and
+- [ ] [TASK-03](docs/implementation-spec.md#task-03) — **Clear hangup handling for unfinished work.** A caller can explicitly
+  ask the call to stay open until task confirmation; an assistant hangup is
+  blocked while the task is pending, and the caller can retract that condition.
+  Continuation, cancellation, and expiry are implemented. Validate the spoken
+  experience: explain that authorized work is pending and where its result will
+  arrive, or explain that hanging up stops it. Reliable model behavior and
   truthful announcements remain live acceptance work.
 - [ ] [OPS-03](docs/implementation-spec.md#ops-03) — **Per-call audio diagnostic report.** Combine existing captured/submitted
   input activity, transcription/audio timing, playback counters, and disconnect
@@ -232,7 +239,15 @@ Implemented and planned surfaces (status is explicit; planned names remain provi
   native executor job with a post-attempt outcome report, not a companion reminder.
   The former daemon timer/linked-reminder design is historical and superseded;
   terminal history remains and pending legacy records are held for review.
+  Reminder delivery can be gateway, call, or both; per-request callback retry
+  delays and linked notification/callback recovery are implemented.
   Evidence: [workflow verification](docs/hermes-owner-flow-verification-2026-10-08.md).
+
+- [x] Reconcile automatic caller-note saves through the existing after-call merge.
+  Targeted corrections retain brief history and source dates, preserve unrelated
+  facts, and cannot overwrite newer owner edits. This does not provide the
+  unfinished explicit owner workflow for selecting, consolidating, or clearing
+  individual facts. Evidence: [note reconciliation tests](tests/test_note_reconciliation.py).
 
 - [x] Allow authorized scheduling tasks to finish after hangup and deliver their
   completion through native Telegram. Record uncertain notification delivery
