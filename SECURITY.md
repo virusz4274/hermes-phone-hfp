@@ -1,7 +1,7 @@
 # Security
 
-This public preview receives fixes on the main branch. Upgrade to the latest
-preview before reporting a problem. There is no supported older-release branch.
+Security fixes are made on `main`. Update to the latest `main` before reporting
+a problem; older commits are not maintained as separate branches.
 
 Use GitHub's **Security → Report a vulnerability** on this repository for private
 reports when available. If private reporting is unavailable, open an issue asking

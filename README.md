@@ -1,7 +1,7 @@
 # Hermes Phone
 
-**Public preview — 0.1.1rc1.** See [compatibility](docs/compatibility.md) and
-[release validation](docs/release.md) for tested versions and hardware limitations.
+See [compatibility](docs/compatibility.md) and
+[validation guidance](docs/validation.md) for tested versions and hardware limitations.
 
 Turn your Hermes Agent into a virtual phone call assistant and office secretary using your paired mobile phone over Bluetooth HFP. Powered by Gemini Live for low-latency, bidirectional conversational voice (with classic STT/TTS fallback), Hermes Phone lets you and your callers interact with Hermes naturally over standard cellular phone calls.
 

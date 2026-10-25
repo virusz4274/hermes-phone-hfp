@@ -1,6 +1,8 @@
 # Maintenance
 
-For this public preview, installations and updates are explicitly invoked and full removal is manual. There is no background auto-update or automatic full uninstall.
+Installations and updates are explicitly invoked, and full removal is manual.
+There is no background auto-update or automatic full uninstall. `main` is the
+normal install source; there is no separate release branch or per-fix tagging process.
 
 ## Installer behavior
 
@@ -29,20 +31,22 @@ Keep optional environment settings commented out with their explanations so they
 
 Comment-only edits need no service restart. After changing active values, restart the affected daemon/Hermes gateways when calls and background tasks are idle. Validate routing with `hfp-mcp route validate`, then use `hfp-mcp phone status` and `hfp-mcp doctor` to check readiness.
 
-## Release branches and versions
+## Branches and package versions
 
-Use `main` for reviewed public previews and `development` for ongoing integration.
-After stopping affected services as described above, update a clean `main` checkout
-with `git switch main` and `git pull --ff-only origin main`. For a pinned release,
-use `git fetch origin --tags` and `git switch --detach <published-release-tag>`.
-A checkout change alone is not a complete upgrade: rerun both installers from the
-same revision before starting the gateways. There is no automatic branch or tag update.
+Use `main` as the source for installs and fixes. The `development` branch may be
+used to prepare a group of changes before opening a pull request to `main`; it is
+not a separate user-facing release channel. After stopping services as described
+above, update the checkout with `git pull --ff-only origin main`, then rerun both
+installers from that same revision before starting the gateways. Updating the
+checkout alone does not update installed components.
 
-When upgrading to **0.1.1rc1**, upgrade the daemon and Hermes plugin together.
-Public note replacements now require `expected_revision` from the preceding read;
+There is no release ceremony or tag for each maintenance change. The package
+version remains build metadata; it does not identify every change installed from
+the moving `main` branch. Record the commit SHA when tracking a specific
+installation or reporting a problem. Upgrade the daemon and Hermes plugin together.
+Public note replacements require `expected_revision` from the preceding read;
 stale revisions cause a conflict and omitted revisions fail validation. Existing
-notes and transcripts are preserved by the automatic database additions. This
-preview does not promise patch-level API compatibility.
+notes and transcripts are preserved by the automatic database additions.
 
 The Gemini demo updates add callback revisions, durable schedule operations,
 reminder-creation claims and trusted call-source attribution through additive

@@ -28,7 +28,7 @@
 - Durable profile-scoped requests, attempt evidence, restricted Hermes decisions, cancellation and restart safeguards distinguish connection from objective completion.
 - Reconcile planning, capability claims, data retention and coordinated upgrade
   documentation with native scheduling. Full workflow live acceptance remains
-  pending; dated evidence is linked from [release validation](docs/release.md).
+  pending; dated evidence is linked from [validation guidance](docs/validation.md).
 
 ## 0.1.1rc1 — public preview
 

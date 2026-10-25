@@ -432,8 +432,8 @@ settle active calls/tasks, back up linked stores, update daemon and plugin toget
 restart affected services, validate routes/readiness, and verify running identities.
 Reassess the historical late-correction deployment note against the actual runtime.
 Record installed revisions and rollback references. Do not repair old task records
-without a specific authorized data-repair request. Use existing maintenance and
-release procedures rather than inventing an automatic updater.
+without a specific authorized data-repair request. Use the existing manual
+maintenance procedures rather than inventing an automatic updater.
 
 ### LIVE-01
 

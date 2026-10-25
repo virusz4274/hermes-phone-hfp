@@ -1155,7 +1155,7 @@ items:
     - scripts/check_hermes.py
     - scripts/check_artifacts.py
     - scripts/smoke_packages.py
-    - docs/release.md
+    - docs/validation.md
     requirements:
     - Verify integrated behavior and all shared invariants with synthetic callers and fake external services.
     - Pass required full-suite, packaging, migration, and isolated real-Hermes checks; update public documentation.
@@ -1269,7 +1269,7 @@ items:
     entry_points:
       - "docs/maintenance.md"
       - "docs/install.md"
-      - "docs/release.md"
+      - "docs/validation.md"
     requirements:
       - "Deploy only after separate authorization using existing maintenance/backup procedures."
       - "Verify both runtimes actually loaded the intended revision before live acceptance."

@@ -1,9 +1,9 @@
-# Preview compatibility
+# Compatibility
 
-This release targets Hermes users on Linux. A tested software interface does not
+Hermes Phone targets Hermes users on Linux. A tested software interface does not
 establish support for every Bluetooth adapter or handset.
 
-| Component | Preview target | Evidence / limitation |
+| Component | Current target | Evidence / limitation |
 | --- | --- | --- |
 | Python | 3.11–3.13 | Supported range; current CI tests 3.13 only; local validation uses 3.13 |
 | Hermes | `130b8f2c5dbca93a81aa396dd2ba44420d78f6f0` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
