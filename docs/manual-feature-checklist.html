@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes Phone manual feature checklist</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#17212b;font:16px/1.55 system-ui,sans-serif}
+main{max-width:1000px;margin:auto;padding:24px}h1{font-size:32px;line-height:1.2}h2{margin-top:36px;font-size:23px}
+.toolbar{position:sticky;top:0;background:#fff;border-bottom:1px solid #d4dce3;padding:12px;z-index:2}
+.controls{max-width:952px;margin:auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+button,input,select,textarea{font:inherit;border:1px solid #adb9c3;border-radius:6px;padding:7px 9px;background:white;color:inherit}
+button{cursor:pointer}button:hover{background:#e8f0f6}input[type=search]{flex:1;min-width:180px}select{max-width:100%}
+.item{background:#fff;border:1px solid #d7dfe5;border-left:5px solid #7d8d9d;border-radius:8px;padding:14px 18px;margin:12px 0;break-inside:avoid}
+.item[data-result=pass]{border-left-color:#228451}.item[data-result=fail]{border-left-color:#bf3a37}
+.item[data-result=not-configured],.item[data-result=skipped]{border-left-color:#b88416}
+.row{display:flex;align-items:center;gap:10px}.row select{margin-left:auto}.tag{font-size:12px;background:#eaf0f5;padding:2px 6px;border-radius:4px}
+textarea{width:100%;min-height:60px;resize:vertical}code{overflow-wrap:anywhere;background:#edf1f4;padding:2px 4px;border-radius:4px}
+#summary{width:100%;font-size:14px;font-weight:600}#storage{font-weight:400}p{margin:10px 0}.scene{padding-left:12px}
+.notice{background:#e7eff8;border:1px solid #c5d6e9;padding:14px;border-radius:8px}a{color:#155a98}
+.item[hidden]{display:none}#export-status{max-width:952px;margin:auto;font-size:14px}
+@media print{.toolbar{position:static}.controls input,.controls label,.controls select,.controls button,#storage{display:none}
+body{background:white;font-size:11pt}main{padding:0;max-width:none}.item{margin:8px 0;padding:10px}.item[hidden]{display:none}
+textarea{border:0;background:white;resize:none}h2{break-after:avoid}h1{font-size:24pt}}
+</style></head><body>
+<div class="toolbar"><div class="controls">
+<input id="search" type="search" aria-label="Search checks" placeholder="Search a feature, prompt, or check ID">
+<select id="category" aria-label="Feature category"><option value="all">All checks</option><option value="core">Core and video</option><option value="VIDEO">Video scenes</option><option value="CONFIG">Configuration dependent</option><option value="ADVANCED">Advanced API and recovery</option></select>
+<select id="result" aria-label="Result filter"><option value="all">All results</option><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select>
+<button id="export">Export results</button><button id="print">Print visible checks</button><button id="reset">Reset results</button>
+<div id="summary" aria-live="polite"></div></div><div id="export-status" role="status"></div></div>
+<main><p class="notice">Results and notes are saved only in this browser. Export results to keep a separate copy. No check runs a tool, places a call, or changes plugin configuration. Use Print to save the visible checklist as PDF.</p>
+<h1>Hermes Phone manual feature checklist</h1>
+<p>Use this for rehearsal and for choosing scenes in your plugin video. A spoken promise is not a pass: check the saved notes, actual task result, the native schedule and final outcome, or delivery receipt where the item asks for it. Start every item as Pending and record Pass, Fail, Not configured, or Skipped, with a short note.</p>
+<p>The 8 October deployment report recorded Gemini, admin routes, caller memory, continuity, background tasks, transcripts and Telegram configured. Recheck the actual configuration before each rehearsal. Guest routes are optional; their absence is Not configured, not a plugin failure. Calendar and business actions require their own Hermes integrations. Classic STT/TTS and call recording remain outside this rehearsal. Text transcripts are included.</p>
+<p>Use a consenting demo recipient and disposable facts such as “My demo drink is lemon tea.” Choose two distinct future times, T1 and T2, and write their full date, time and timezone before testing callbacks. A callback destination must differ from the paired handset&#x27;s own SIM number. For history deletion, forgetting notes and destructive recovery checks, use disposable demo data. Keep credentials and private caller details off screen.</p>
+<p>Session date: __________  Tester: __________  Backend: __________</p>
+<p>Phone and host versions: __________  Demo recipient: __________</p>
+<p>T1 with date and timezone: __________  T2 with date and timezone: __________</p>
+<p>Tags: VIDEO means a suggested scene; CONFIG means extra configuration/integration; ADVANCED means a host/API test that is usually best done off camera. Untagged items are ordinary manual checks. A Pass checkbox means you actually observed the expected result; use the browser version for other statuses and notes.</p>
+<h2>Video sequence</h2>
+<p>Record successful scenes after rehearsal. This sequence combines several features per call; callback waits and service-recovery checks can be separate clips.</p>
+<p class="scene">1. Show phone status and explain that the paired handset supplies the cellular call.</p>
+<p class="scene">2. Call in, say hello, and let Hermes respond. Then interrupt a longer answer.</p>
+<p class="scene">3. Ask “How much free RAM is on your host right now?” Show the actual Hermes tool result.</p>
+<p class="scene">4. Say “Remember that my demo drink is lemon tea.” Read the saved note afterward.</p>
+<p class="scene">5. Share a separate disposable fact naturally, hang up, and show its automatic memory-save outcome.</p>
+<p class="scene">6. Call again. Ask about the saved preference and an exact detail from the earlier call.</p>
+<p class="scene">7. Ask for a phone reminder at T1, then move it to T2. Show unchanged IDs and the effective native time and final outcome.</p>
+<p class="scene">8. From Hermes chat, request an outgoing call with a complete purpose. Listen for the cached introduction, then let the recipient reply.</p>
+<p class="scene">9. Ask for substantial work that should continue after hangup. Show acceptance, then actual completion and Telegram delivery.</p>
+<p class="scene">10. In an admin call, demonstrate a scoped owner lookup and a confirmed new chat. Explain that resetting chat preserves saved notes.</p>
+<p>An optional guest clip can show a configured guest being answered but denied owner access. An optional calendar clip needs a configured provider and a real booking receipt. Do not describe either as demonstrated if it was not configured and tested. Describe Telegram reminders as messages, not interactive cards.</p>
+<h2>Setup and health</h2>
+<article class="item" data-id="S01" data-tag="VIDEO">
+<div class="row"><strong>S01</strong><span class="tag">VIDEO</span><select aria-label="Result for S01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Run <code>.venv/bin/hfp-mcp doctor</code>. Pass: the prerequisites for your chosen backend and routed Hermes endpoint pass; investigate warnings relevant to that setup.</p><textarea rows="2" aria-label="Notes for S01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S02" data-tag="CORE">
+<div class="row"><strong>S02</strong><span class="tag">CORE</span><select aria-label="Result for S02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Run <code>.venv/bin/hfp-mcp route validate</code>. Pass: the existing phone configuration validates without changing it.</p><textarea rows="2" aria-label="Notes for S02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S03" data-tag="CORE">
+<div class="row"><strong>S03</strong><span class="tag">CORE</span><select aria-label="Result for S03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Run <code>.venv/bin/hfp-mcp route explain &lt;demo-number&gt;</code>. Pass: the normalized number selects the intended endpoint, policy and voice backend.</p><textarea rows="2" aria-label="Notes for S03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S04" data-tag="VIDEO">
+<div class="row"><strong>S04</strong><span class="tag">VIDEO</span><select aria-label="Result for S04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask Hermes “Show the phone status.” Pass: <code>hfp_phone_status</code> shows the handset connected and idle before rehearsal, and the correct active state during a call.</p><textarea rows="2" aria-label="Notes for S04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S05" data-tag="CORE">
+<div class="row"><strong>S05</strong><span class="tag">CORE</span><select aria-label="Result for S05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Check daemon and gateway services and installed module identity. Pass: both are running the intended build; a matching version string alone is insufficient.</p><textarea rows="2" aria-label="Notes for S05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S06" data-tag="ADVANCED">
+<div class="row"><strong>S06</strong><span class="tag">ADVANCED</span><select aria-label="Result for S06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect authenticated capabilities. Pass: supported features and profile identity are accurate; an unauthenticated request is refused.</p><textarea rows="2" aria-label="Notes for S06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S07" data-tag="ADVANCED">
+<div class="row"><strong>S07</strong><span class="tag">ADVANCED</span><select aria-label="Result for S07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Exercise the local stdio MCP proxy. Pass: it reaches the existing daemon rather than starting another Bluetooth owner.</p><textarea rows="2" aria-label="Notes for S07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="S08" data-tag="ADVANCED">
+<div class="row"><strong>S08</strong><span class="tag">ADVANCED</span><select aria-label="Result for S08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>On a spare/test handset, exercise time-bounded <code>hfp-mcp enroll</code>. Pass: enrollment expires and selects the intended paired device. Skip replacing your working demo handset.</p><textarea rows="2" aria-label="Notes for S08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Incoming calls and conversation</h2>
+<article class="item" data-id="V01" data-tag="VIDEO">
+<div class="row"><strong>V01</strong><span class="tag">VIDEO</span><select aria-label="Result for V01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Call from a configured admin number. Pass: auto-answer follows configuration and binds the correct profile before starting Gemini.</p><textarea rows="2" aria-label="Notes for V01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V02" data-tag="VIDEO">
+<div class="row"><strong>V02</strong><span class="tag">VIDEO</span><select aria-label="Result for V02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>First say hello immediately after answer once; repeat with a brief pause before hello. Pass: the call stays connected without an automatic greeting; the first hello is recognized without needing repetition; after your hello, Hermes briefly identifies itself as an AI assistant and asks how it can help.</p><textarea rows="2" aria-label="Notes for V02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V03" data-tag="VIDEO">
+<div class="row"><strong>V03</strong><span class="tag">VIDEO</span><select aria-label="Result for V03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask a normal question and continue with a follow-up. Pass: usable two-way speech and relevant answers without unnecessary task delegation.</p><textarea rows="2" aria-label="Notes for V03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V04" data-tag="VIDEO">
+<div class="row"><strong>V04</strong><span class="tag">VIDEO</span><select aria-label="Result for V04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Interrupt a long answer with “Stop, answer this instead.” Pass: playback stops and the new request is heard; interrupting speech alone does not cancel an independent task.</p><textarea rows="2" aria-label="Notes for V04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V05" data-tag="CORE">
+<div class="row"><strong>V05</strong><span class="tag">CORE</span><select aria-label="Result for V05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Start speaking immediately when the call becomes ready. Pass: the opening request is heard and answered naturally, without a forced greeting over your speech.</p><textarea rows="2" aria-label="Notes for V05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V06" data-tag="CORE">
+<div class="row"><strong>V06</strong><span class="tag">CORE</span><select aria-label="Result for V06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Switch between languages you intend to demonstrate. Pass: the requested language and task constraints reach Hermes and remain intelligible; record recognition mistakes.</p><textarea rows="2" aria-label="Notes for V06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V07" data-tag="ADVANCED">
+<div class="row"><strong>V07</strong><span class="tag">ADVANCED</span><select aria-label="Result for V07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Trigger a provider reconnect during one physical call. Pass: voice recovers when supported, without another incoming introduction or replayed action.</p><textarea rows="2" aria-label="Notes for V07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V08" data-tag="CORE">
+<div class="row"><strong>V08</strong><span class="tag">CORE</span><select aria-label="Result for V08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Do not hang up yet,” or quote a fictional hangup command. Pass: quoted, negated and hypothetical speech does not end the call.</p><textarea rows="2" aria-label="Notes for V08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V09" data-tag="VIDEO">
+<div class="row"><strong>V09</strong><span class="tag">VIDEO</span><select aria-label="Result for V09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Hang up now.” Repeat with the recipient hanging up. Pass: the physical call ends and audio/resources are released in both cases.</p><textarea rows="2" aria-label="Notes for V09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V10" data-tag="CONFIG">
+<div class="row"><strong>V10</strong><span class="tag">CONFIG</span><select aria-label="Result for V10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With <code>auto_answer: false</code> on a disposable configuration, call and answer manually. Pass: a permitted call waits for explicit answer; an unpermitted caller is still declined.</p><textarea rows="2" aria-label="Notes for V10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="V11" data-tag="CONFIG">
+<div class="row"><strong>V11</strong><span class="tag">CONFIG</span><select aria-label="Result for V11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With a short configured call limit, stay on the call past it. Pass: the limit still ends the call even if a task-confirmation wait is active.</p><textarea rows="2" aria-label="Notes for V11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Outgoing calls and purpose</h2>
+<article class="item" data-id="O01" data-tag="VIDEO">
+<div class="row"><strong>O01</strong><span class="tag">VIDEO</span><select aria-label="Result for O01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In Hermes chat say “Call &lt;demo-number&gt; on my behalf, introduce yourself, ask about &lt;demo-topic&gt;, and use &lt;language&gt;.” Pass: <code>hfp_phone_start_call</code> receives the complete purpose and the correct destination.</p><textarea rows="2" aria-label="Notes for O01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O02" data-tag="VIDEO">
+<div class="row"><strong>O02</strong><span class="tag">VIDEO</span><select aria-label="Result for O02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Have the recipient pause after answer. Pass: the cached “Hello, this is Hermes, an AI assistant” plays once without needing a hello first; after the recipient replies, Gemini explains/follows the supplied purpose without repeating the introduction. Repeat with a scheduled callback and interrupt the opening by speaking.</p><textarea rows="2" aria-label="Notes for O02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O03" data-tag="CORE">
+<div class="row"><strong>O03</strong><span class="tag">CORE</span><select aria-label="Result for O03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Include several objectives and one explicit constraint in the brief. Pass: the assistant retains all of them without inventing names, relationships, prior calls or permission to book something.</p><textarea rows="2" aria-label="Notes for O03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O04" data-tag="CORE">
+<div class="row"><strong>O04</strong><span class="tag">CORE</span><select aria-label="Result for O04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Call a new number without an incoming route. Pass: an eligible outgoing endpoint is selected; the automatic route has conversation/notes access, not personal admin tools. The outgoing call does not add an incoming permission grant.</p><textarea rows="2" aria-label="Notes for O04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O05" data-tag="CORE">
+<div class="row"><strong>O05</strong><span class="tag">CORE</span><select aria-label="Result for O05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Call a recipient again after saving a disposable preference. Pass: that recipient&#x27;s notes are used; another recipient&#x27;s details are not.</p><textarea rows="2" aria-label="Notes for O05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O06" data-tag="CORE">
+<div class="row"><strong>O06</strong><span class="tag">CORE</span><select aria-label="Result for O06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect the outgoing start receipt and later attempt outcome. Pass: scheduling acceptance, voice readiness, objective completion and whether the recipient heard a message are reported separately.</p><textarea rows="2" aria-label="Notes for O06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O07" data-tag="ADVANCED">
+<div class="row"><strong>O07</strong><span class="tag">ADVANCED</span><select aria-label="Result for O07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Repeat an owner-admitted call request with the same exact request ID and arguments. Pass: the existing receipt is returned without a second dial; changed arguments are rejected.</p><textarea rows="2" aria-label="Notes for O07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O08" data-tag="CORE">
+<div class="row"><strong>O08</strong><span class="tag">CORE</span><select aria-label="Result for O08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Attempt a blocked destination and the paired handset&#x27;s own SIM number. Pass: both are refused before dialing.</p><textarea rows="2" aria-label="Notes for O08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O09" data-tag="CORE">
+<div class="row"><strong>O09</strong><span class="tag">CORE</span><select aria-label="Result for O09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Have the demo recipient reject/not answer a call. Pass: the outcome is accurate; Hermes chooses any bounded retry after a verified failed connection. A clear spoken refusal stops attempts, and uncertainty requires guidance.</p><textarea rows="2" aria-label="Notes for O09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="O10" data-tag="CONFIG">
+<div class="row"><strong>O10</strong><span class="tag">CONFIG</span><select aria-label="Result for O10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With multiple endpoints and no unambiguous outgoing endpoint, try a new destination. Pass: ambiguity is refused until explicitly configured; no random profile is selected.</p><textarea rows="2" aria-label="Notes for O10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Caller notes and automatic memory</h2>
+<article class="item" data-id="M01" data-tag="VIDEO">
+<div class="row"><strong>M01</strong><span class="tag">VIDEO</span><select aria-label="Result for M01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Remember that my demo drink is lemon tea.” Pass: a successful update receipt precedes any claim that it was saved; owner chat can read the fact afterward.</p><textarea rows="2" aria-label="Notes for M01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M02" data-tag="VIDEO">
+<div class="row"><strong>M02</strong><span class="tag">VIDEO</span><select aria-label="Result for M02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask “What do you remember about my demo drink?” Pass: current notes are checked and described as already saved, rather than as a new save.</p><textarea rows="2" aria-label="Notes for M02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M03" data-tag="CORE">
+<div class="row"><strong>M03</strong><span class="tag">CORE</span><select aria-label="Result for M03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Correct the preference to mint tea. Pass: the corrected fact is saved, relevant existing notes survive, and later recall does not prefer the outdated value.</p><textarea rows="2" aria-label="Notes for M03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M04" data-tag="VIDEO">
+<div class="row"><strong>M04</strong><span class="tag">VIDEO</span><select aria-label="Result for M04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In ordinary conversation say “My demo delivery arrived today,” without saying “remember.” Hang up and inspect <code>memory_save</code> in the call summary. Pass: a relevant captured fact is saved with caller/date provenance, or a skipped/failed/incomplete result is accurately explained.</p><textarea rows="2" aria-label="Notes for M04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M05" data-tag="CORE">
+<div class="row"><strong>M05</strong><span class="tag">CORE</span><select aria-label="Result for M05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect notes after the same fact was saved explicitly and automatically. Pass: no duplicate fact is added; existing facts are retained.</p><textarea rows="2" aria-label="Notes for M05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M06" data-tag="CORE">
+<div class="row"><strong>M06</strong><span class="tag">CORE</span><select aria-label="Result for M06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>State an uncertain plan or unclear date. Pass: it is clarified or retained as uncertain, without inventing a firm appointment or claiming an action completed.</p><textarea rows="2" aria-label="Notes for M06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M07" data-tag="CORE">
+<div class="row"><strong>M07</strong><span class="tag">CORE</span><select aria-label="Result for M07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect a dated note and call attribution. Pass: reporting date, timezone and originating call are accurate; relative dates refer to the original statement/call context.</p><textarea rows="2" aria-label="Notes for M07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M08" data-tag="CORE">
+<div class="row"><strong>M08</strong><span class="tag">CORE</span><select aria-label="Result for M08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In owner chat use <code>hfp_phone_caller_read</code>, then <code>hfp_phone_caller_update</code> with the read revision and merged notes. Pass: the next caller session sees the same saved data.</p><textarea rows="2" aria-label="Notes for M08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M09" data-tag="ADVANCED">
+<div class="row"><strong>M09</strong><span class="tag">ADVANCED</span><select aria-label="Result for M09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Submit a stale note revision. Pass: conflict is reported, old data is preserved, and a fresh read/merge is required.</p><textarea rows="2" aria-label="Notes for M09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M10" data-tag="ADVANCED">
+<div class="row"><strong>M10</strong><span class="tag">ADVANCED</span><select aria-label="Result for M10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Try an oversized note replacement. Pass: capacity failure preserves the previous notes instead of silently losing them.</p><textarea rows="2" aria-label="Notes for M10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M11" data-tag="CORE">
+<div class="row"><strong>M11</strong><span class="tag">CORE</span><select aria-label="Result for M11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>From another configured number, ask for the first caller&#x27;s preference. Pass: ordinary caller memory remains separate even if both numbers share a profile; explicit authorized admin lookup is a separate operation.</p><textarea rows="2" aria-label="Notes for M11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M12" data-tag="CONFIG">
+<div class="row"><strong>M12</strong><span class="tag">CONFIG</span><select aria-label="Result for M12">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Test a route with <code>remember: false</code> and a withheld-number caller. Pass: persistent caller facts are not saved/resumed under another caller&#x27;s identity.</p><textarea rows="2" aria-label="Notes for M12" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M13" data-tag="ADVANCED">
+<div class="row"><strong>M13</strong><span class="tag">ADVANCED</span><select aria-label="Result for M13">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Make memory extraction unavailable or interrupt final capture. Pass: call status reports the actual failed/skipped/incomplete save, rather than claiming memory success.</p><textarea rows="2" aria-label="Notes for M13" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="M14" data-tag="ADVANCED">
+<div class="row"><strong>M14</strong><span class="tag">ADVANCED</span><select aria-label="Result for M14">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>On disposable facts, use <code>.venv/bin/hfp-mcp caller inspect --profile &lt;profile&gt; --number &lt;number&gt;</code> and then <code>caller forget</code> with those selectors. Pass: only that caller&#x27;s saved notes are cleared; pending closeout does not restore forgotten facts.</p><textarea rows="2" aria-label="Notes for M14" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Continuity and session controls</h2>
+<article class="item" data-id="C01" data-tag="VIDEO">
+<div class="row"><strong>C01</strong><span class="tag">VIDEO</span><select aria-label="Result for C01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Mention a disposable dialogue detail, hang up, call back and ask what you discussed. Pass: the same number/profile resumes its permitted conversation when continuity is enabled.</p><textarea rows="2" aria-label="Notes for C01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C02" data-tag="CORE">
+<div class="row"><strong>C02</strong><span class="tag">CORE</span><select aria-label="Result for C02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for exact wording from an earlier call. Pass: <code>phone_recall</code> or delegated <code>hfp_caller_recall</code> reads retained dialogue when notes are insufficient; it does not fabricate a quote.</p><textarea rows="2" aria-label="Notes for C02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C03" data-tag="ADVANCED">
+<div class="row"><strong>C03</strong><span class="tag">ADVANCED</span><select aria-label="Result for C03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Read long/multilingual dialogue over multiple pages and text offsets. Pass: all available text can be read without missing fragments or crossing callers.</p><textarea rows="2" aria-label="Notes for C03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C04" data-tag="CORE">
+<div class="row"><strong>C04</strong><span class="tag">CORE</span><select aria-label="Result for C04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Restart the daemon while idle, reconnect, then call back. Pass: permitted saved notes/dialogue persist and no prior action is replayed.</p><textarea rows="2" aria-label="Notes for C04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C05" data-tag="VIDEO">
+<div class="row"><strong>C05</strong><span class="tag">VIDEO</span><select aria-label="Result for C05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Start a new chat.” Decline once, then repeat and explicitly confirm. Pass: decline preserves the session; confirmation selects fresh phone/Hermes sessions while the physical call stays active.</p><textarea rows="2" aria-label="Notes for C05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C06" data-tag="VIDEO">
+<div class="row"><strong>C06</strong><span class="tag">VIDEO</span><select aria-label="Result for C06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>After the confirmed reset, continue talking and ask about the saved preference. Pass: no greeting replay; saved notes remain separate from cleared recent chat.</p><textarea rows="2" aria-label="Notes for C06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C07" data-tag="CORE">
+<div class="row"><strong>C07</strong><span class="tag">CORE</span><select aria-label="Result for C07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask explicitly for archived dialogue after a reset. Pass: only this caller&#x27;s retained archived conversation can be recalled.</p><textarea rows="2" aria-label="Notes for C07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C08" data-tag="CORE">
+<div class="row"><strong>C08</strong><span class="tag">CORE</span><select aria-label="Result for C08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Start a reset request but wait beyond its confirmation window. Pass: an unrelated later reply cannot confirm the expired request.</p><textarea rows="2" aria-label="Notes for C08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C09" data-tag="ADVANCED">
+<div class="row"><strong>C09</strong><span class="tag">ADVANCED</span><select aria-label="Result for C09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>On disposable dialogue say “Delete my phone history,” then explicitly confirm. Pass: that caller&#x27;s retained dialogue and linked managed sessions are removed; saved facts remain until separately forgotten. Partial cleanup is reported honestly.</p><textarea rows="2" aria-label="Notes for C09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C10" data-tag="ADVANCED">
+<div class="row"><strong>C10</strong><span class="tag">ADVANCED</span><select aria-label="Result for C10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With task history present and no active work, request compaction. Pass: native Hermes compaction is used, retained phone dialogue survives and voice context refresh does not repeat the greeting.</p><textarea rows="2" aria-label="Notes for C10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C11" data-tag="CONFIG">
+<div class="row"><strong>C11</strong><span class="tag">CONFIG</span><select aria-label="Result for C11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Turn continuity off in a disposable route. Pass: calls still work, but no cross-call dialogue resumption is promised; caller notes follow their own memory setting.</p><textarea rows="2" aria-label="Notes for C11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="C12" data-tag="ADVANCED">
+<div class="row"><strong>C12</strong><span class="tag">ADVANCED</span><select aria-label="Result for C12">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Delay an old task/lookup result across hangup, reset or a different caller&#x27;s call. Pass: it cannot be spoken into the replacement session.</p><textarea rows="2" aria-label="Notes for C12" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Hermes actions and task control</h2>
+<article class="item" data-id="T01" data-tag="VIDEO">
+<div class="row"><strong>T01</strong><span class="tag">VIDEO</span><select aria-label="Result for T01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask “How much free RAM is on your host right now?” Pass: a real permitted Hermes tool runs and the answer uses its result, rather than guessing or treating the request as fiction.</p><textarea rows="2" aria-label="Notes for T01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T02" data-tag="VIDEO">
+<div class="row"><strong>T02</strong><span class="tag">VIDEO</span><select aria-label="Result for T02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Submit a longer harmless task and ask about its status. Pass: acceptance/pending/running/completed are distinguished; a status question does not create another task.</p><textarea rows="2" aria-label="Notes for T02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T03" data-tag="VIDEO">
+<div class="row"><strong>T03</strong><span class="tag">VIDEO</span><select aria-label="Result for T03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Keep chatting while Hermes works. Pass: conversation remains usable, and completed-task speech waits for a suitable pause.</p><textarea rows="2" aria-label="Notes for T03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T04" data-tag="VIDEO">
+<div class="row"><strong>T04</strong><span class="tag">VIDEO</span><select aria-label="Result for T04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Correct an active request: “Actually, change &lt;specific detail&gt;.” Pass: the original logical task is selected and the actual result reflects the correction; steering acceptance alone is not called completion.</p><textarea rows="2" aria-label="Notes for T04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T05" data-tag="ADVANCED">
+<div class="row"><strong>T05</strong><span class="tag">ADVANCED</span><select aria-label="Result for T05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Give a correction as the original run finishes. Pass: any follow-up applies only the undelivered correction, retains task identity/deadline/permissions and does not repeat completed actions.</p><textarea rows="2" aria-label="Notes for T05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T06" data-tag="VIDEO">
+<div class="row"><strong>T06</strong><span class="tag">VIDEO</span><select aria-label="Result for T06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Stop that task.” Pass: selected task authority is revoked and cancellation is reported; already completed external actions are not falsely described as undone.</p><textarea rows="2" aria-label="Notes for T06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T07" data-tag="CORE">
+<div class="row"><strong>T07</strong><span class="tag">CORE</span><select aria-label="Result for T07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for a clearly independent second task. Pass: available capacity allows separate work with separate task identity; corrections still target their original task.</p><textarea rows="2" aria-label="Notes for T07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T08" data-tag="CORE">
+<div class="row"><strong>T08</strong><span class="tag">CORE</span><select aria-label="Result for T08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With the configured task slots occupied, request another task. Pass: busy/capacity is reported; no hidden queue or unexpected later execution.</p><textarea rows="2" aria-label="Notes for T08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T09" data-tag="CORE">
+<div class="row"><strong>T09</strong><span class="tag">CORE</span><select aria-label="Result for T09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Give an ambiguous correction while multiple tasks exist. Pass: the assistant asks which task, rather than modifying the wrong one.</p><textarea rows="2" aria-label="Notes for T09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T10" data-tag="CORE">
+<div class="row"><strong>T10</strong><span class="tag">CORE</span><select aria-label="Result for T10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Replace a running task with another. Pass: the original is stopped and settled before replacement starts; completed actions are not repeated.</p><textarea rows="2" aria-label="Notes for T10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T11" data-tag="VIDEO">
+<div class="row"><strong>T11</strong><span class="tag">VIDEO</span><select aria-label="Result for T11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Wait until the result is confirmed before hanging up.” Pass: assistant-initiated hangup waits while authoritative task work is pending. Then explicitly say “Hang up now instead.” Pass: that retraction ends the call.</p><textarea rows="2" aria-label="Notes for T11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T12" data-tag="CORE">
+<div class="row"><strong>T12</strong><span class="tag">CORE</span><select aria-label="Result for T12">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Trigger a tool failure or denial. Pass: the spoken answer uses the actual error/receipt and does not present an unsuccessful action as completed.</p><textarea rows="2" aria-label="Notes for T12" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T13" data-tag="CONFIG">
+<div class="row"><strong>T13</strong><span class="tag">CONFIG</span><select aria-label="Result for T13">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Trigger an action requiring normal Hermes approval. Pass: the exact approval request appears in status; Gemini does not approve itself.</p><textarea rows="2" aria-label="Notes for T13" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="T14" data-tag="CONFIG">
+<div class="row"><strong>T14</strong><span class="tag">CONFIG</span><select aria-label="Result for T14">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Approve one request with <code>hfp_phone_approval</code> or <code>.venv/bin/hfp-mcp phone approve --request-id &lt;id&gt;</code>, then deny another. Pass: only the selected pending request is resolved; denial is respected.</p><textarea rows="2" aria-label="Notes for T14" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Work after hangup and Telegram</h2>
+<article class="item" data-id="B01" data-tag="VIDEO">
+<div class="row"><strong>B01</strong><span class="tag">VIDEO</span><select aria-label="Result for B01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Do &lt;harmless substantial task&gt; and send the result to my Telegram; continue after I hang up.” Pass: continuation permission/designation is confirmed before Telegram completion is promised.</p><textarea rows="2" aria-label="Notes for B01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B02" data-tag="VIDEO">
+<div class="row"><strong>B02</strong><span class="tag">VIDEO</span><select aria-label="Result for B02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Hang up after acceptance and watch owner status. Pass: authorized continued work finishes under its recorded native run rather than restarting the request.</p><textarea rows="2" aria-label="Notes for B02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B03" data-tag="VIDEO">
+<div class="row"><strong>B03</strong><span class="tag">VIDEO</span><select aria-label="Result for B03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Read Telegram completion and inspect the actual output. Pass: the notice identifies the task and its final corrected outcome, not merely “accepted” or the original outdated result.</p><textarea rows="2" aria-label="Notes for B03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B04" data-tag="CORE">
+<div class="row"><strong>B04</strong><span class="tag">CORE</span><select aria-label="Result for B04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Designate already-running work to continue. Pass: <code>hermes_task continue</code> changes that task&#x27;s authorized lifetime without creating another task.</p><textarea rows="2" aria-label="Notes for B04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B05" data-tag="CORE">
+<div class="row"><strong>B05</strong><span class="tag">CORE</span><select aria-label="Result for B05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>End a call with a task that has no continuation authorization. Pass: call-bound work stops; the assistant does not promise it will keep running.</p><textarea rows="2" aria-label="Notes for B05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B06" data-tag="ADVANCED">
+<div class="row"><strong>B06</strong><span class="tag">ADVANCED</span><select aria-label="Result for B06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect the continuation deadline, call again or ask status, then let a short test grant expire. Pass: later calls/status/corrections do not extend the original grant or revive expired authority.</p><textarea rows="2" aria-label="Notes for B06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B07" data-tag="CORE">
+<div class="row"><strong>B07</strong><span class="tag">CORE</span><select aria-label="Result for B07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Cancel a continued task from a later authorized session/owner control. Pass: its status/delivery reflect cancellation; no late false success announcement.</p><textarea rows="2" aria-label="Notes for B07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B08" data-tag="ADVANCED">
+<div class="row"><strong>B08</strong><span class="tag">ADVANCED</span><select aria-label="Result for B08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Restart Hermes during recorded continued work. Pass: it reconciles the existing native run; uncertain/interrupted work is not automatically resubmitted.</p><textarea rows="2" aria-label="Notes for B08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B09" data-tag="ADVANCED">
+<div class="row"><strong>B09</strong><span class="tag">ADVANCED</span><select aria-label="Result for B09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Simulate an uncertain Telegram send. Pass: delivery stays uncertain, with no automatic resend, test message or alternate transport.</p><textarea rows="2" aria-label="Notes for B09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="B10" data-tag="CONFIG">
+<div class="row"><strong>B10</strong><span class="tag">CONFIG</span><select aria-label="Result for B10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Request a harmless file attachment with an explicit count/format. Pass: native Hermes delivery sends the requested files and format; a timeout is not called confirmed delivery.</p><textarea rows="2" aria-label="Notes for B10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Text reminders and phone callbacks</h2>
+<article class="item" data-id="R01" data-tag="VIDEO">
+<div class="row"><strong>R01</strong><span class="tag">VIDEO</span><select aria-label="Result for R01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for a text reminder at a specific future date/time/timezone. Pass: <code>hfp_phone_schedule_reminder</code> returns a native job ID and matching read-back; the Telegram message actually arrives.</p><textarea rows="2" aria-label="Notes for R01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R02" data-tag="CORE">
+<div class="row"><strong>R02</strong><span class="tag">CORE</span><select aria-label="Result for R02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In separate tests use <code>delay_minutes</code>, <code>delay_seconds</code> and exact timezone-aware <code>run_at</code>. Pass: each yields the intended effective time; ambiguous dates/AM/PM and reminder lead times are clarified.</p><textarea rows="2" aria-label="Notes for R02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R03" data-tag="VIDEO">
+<div class="row"><strong>R03</strong><span class="tag">VIDEO</span><select aria-label="Result for R03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask “Call me at T1 to remind me about &lt;demo-topic&gt;.” Pass: one native Hermes no-agent phone job is verified, with a callback ID and cron_job_id; reminder_job_id is the same job alias. No companion instruction reminder exists.</p><textarea rows="2" aria-label="Notes for R03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R04" data-tag="VIDEO">
+<div class="row"><strong>R04</strong><span class="tag">VIDEO</span><select aria-label="Result for R04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Say “Move that same callback to T2.” Pass: exact callback ID, stable change ID and current revision are used; the same native job reads back as T2 and verification is applied.</p><textarea rows="2" aria-label="Notes for R04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R05" data-tag="VIDEO">
+<div class="row"><strong>R05</strong><span class="tag">VIDEO</span><select aria-label="Result for R05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Wait through T1, then T2. Pass: no call at T1; the moved call starts at/after T2. After it ends, Telegram states its outcome and Hermes decision, including any verified next attempt.</p><textarea rows="2" aria-label="Notes for R05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R06" data-tag="ADVANCED">
+<div class="row"><strong>R06</strong><span class="tag">ADVANCED</span><select aria-label="Result for R06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Replay the identical reschedule request. Pass: its recorded receipt is returned with no extra workflow, native job or change. Reusing its ID with changed arguments is rejected.</p><textarea rows="2" aria-label="Notes for R06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R07" data-tag="ADVANCED">
+<div class="row"><strong>R07</strong><span class="tag">ADVANCED</span><select aria-label="Result for R07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Replay identical creation using stable request ID and exact run_at. Pass: the same workflow and native job are returned; uncertain creation never produces another job.</p><textarea rows="2" aria-label="Notes for R07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R08" data-tag="ADVANCED">
+<div class="row"><strong>R08</strong><span class="tag">ADVANCED</span><select aria-label="Result for R08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Submit a stale revision or target without timezone. Pass: the operation is rejected without changing schedules.</p><textarea rows="2" aria-label="Notes for R08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R09" data-tag="VIDEO">
+<div class="row"><strong>R09</strong><span class="tag">VIDEO</span><select aria-label="Result for R09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Cancel a separate pending request. Pass: no future attempts occur. Cancel an active request separately: future decisions are blocked, while the current call continues until normal hangup.</p><textarea rows="2" aria-label="Notes for R09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R10" data-tag="ADVANCED">
+<div class="row"><strong>R10</strong><span class="tag">ADVANCED</span><select aria-label="Result for R10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Try to move a firing/terminal attempt or use a stale revision. Pass: no change or extra dial. Cancellation may stop future attempts without hanging up the current call.</p><textarea rows="2" aria-label="Notes for R10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R11" data-tag="ADVANCED">
+<div class="row"><strong>R11</strong><span class="tag">ADVANCED</span><select aria-label="Result for R11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Make one schedule update/read-back fail or time out. Pass: requested/effective values and failed/partial/uncertain status are retained; no false success and no callback firing while the change is unresolved.</p><textarea rows="2" aria-label="Notes for R11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R12" data-tag="ADVANCED">
+<div class="row"><strong>R12</strong><span class="tag">ADVANCED</span><select aria-label="Result for R12">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Restart between scheduling, dialing, outcome and decision. Pass: verified progress survives; no uncertain call, completed action or claimed report is replayed.</p><textarea rows="2" aria-label="Notes for R12" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R13" data-tag="ADVANCED">
+<div class="row"><strong>R13</strong><span class="tag">ADVANCED</span><select aria-label="Result for R13">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Make native job creation or read-back unavailable. Pass: the request remains held, reports unverified, and cannot dial through a fallback daemon timer.</p><textarea rows="2" aria-label="Notes for R13" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R14" data-tag="ADVANCED">
+<div class="row"><strong>R14</strong><span class="tag">ADVANCED</span><select aria-label="Result for R14">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In an isolated callback test, recover after its due time. Pass: native Hermes catch-up policy applies; the plugin has no separate five-minute timer. Expired, cancelled or changed occurrences cannot dial.</p><textarea rows="2" aria-label="Notes for R14" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R15" data-tag="CORE">
+<div class="row"><strong>R15</strong><span class="tag">CORE</span><select aria-label="Result for R15">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect an attempt where the handset is unavailable. Pass: the failure is retained; Hermes decides a bounded retry or asks for guidance, and any new native schedule is verified.</p><textarea rows="2" aria-label="Notes for R15" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R16" data-tag="CORE">
+<div class="row"><strong>R16</strong><span class="tag">CORE</span><select aria-label="Result for R16">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Disconnect Bluetooth while idle for a text-only reminder test. Pass: the native Telegram reminder still works; a phone callback requires HFP readiness. Reconnect before the next call.</p><textarea rows="2" aria-label="Notes for R16" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R17" data-tag="CORE">
+<div class="row"><strong>R17</strong><span class="tag">CORE</span><select aria-label="Result for R17">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask to save an appointment fact without asking for a reminder or booking. Pass: notes are saved independently; no unsolicited schedule or calendar event appears.</p><textarea rows="2" aria-label="Notes for R17" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R18" data-tag="ADVANCED">
+<div class="row"><strong>R18</strong><span class="tag">ADVANCED</span><select aria-label="Result for R18">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect task completion after a failed time correction. Pass: its notice leads with the verified/uncertain schedule receipt and actual effective time, not a generic successful-move claim.</p><textarea rows="2" aria-label="Notes for R18" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="R19" data-tag="VIDEO"><div class="row"><strong>R19</strong><span class="tag">VIDEO</span><select aria-label="Result for R19"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Ignore an outgoing attempt. Pass: a verified not-connected outcome triggers Hermes follow-up; Telegram gives its decision and any next native schedule. At most three launched attempts occur.</p><textarea rows="2" aria-label="Notes for R19" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R20" data-tag="VIDEO"><div class="row"><strong>R20</strong><span class="tag">VIDEO</span><select aria-label="Result for R20"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Recipient says “Call tomorrow at 10 AM.” Pass: Hermes defers using the evidenced time and original objective, rather than treating it as an unanswered call.</p><textarea rows="2" aria-label="Notes for R20" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R21" data-tag="VIDEO"><div class="row"><strong>R21</strong><span class="tag">VIDEO</span><select aria-label="Result for R21"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Recipient clearly declines. Pass: the request closes declined and no later call is scheduled.</p><textarea rows="2" aria-label="Notes for R21" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R22" data-tag="VIDEO"><div class="row"><strong>R22</strong><span class="tag">VIDEO</span><select aria-label="Result for R22"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Recipient agrees to a request. Pass: the report describes the agreement accurately; it does not claim an external action, such as uploading a video, happened without verification.</p><textarea rows="2" aria-label="Notes for R22" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R23" data-tag="ADVANCED"><div class="row"><strong>R23</strong><span class="tag">ADVANCED</span><select aria-label="Result for R23"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Interrupt transport or make an outcome uncertain. Pass: Hermes asks for guidance/reconciliation; no blind automatic retry.</p><textarea rows="2" aria-label="Notes for R23" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R24" data-tag="ADVANCED"><div class="row"><strong>R24</strong><span class="tag">ADVANCED</span><select aria-label="Result for R24"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Check retries at 08:00/22:00, native catch-up, and the seven-day or earlier explicit deadline. Pass: automatic retry admission uses 08:00 inclusive–22:00 exclusive in the requester timezone, with at most three launched attempts. Explicit owner timing and evidenced recipient times use the documented hours exception; an out-of-hours automatic catch-up requires guidance.</p><textarea rows="2" aria-label="Notes for R24" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R25" data-tag="ADVANCED"><div class="row"><strong>R25</strong><span class="tag">ADVANCED</span><select aria-label="Result for R25"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Revoke the original owner route before a future attempt or report. Pass: execution/result authority fails closed, with no other profile access.</p><textarea rows="2" aria-label="Notes for R25" placeholder="Observed result, evidence IDs and actual times"></textarea></article>
+<article class="item" data-id="R26" data-tag="CORE"><div class="row"><strong>R26</strong><span class="tag">CORE</span><select aria-label="Result for R26"><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div><p>Recall the recipient and previous progress in a later call. Pass: permitted memory remains scoped and verified completed actions are not repeated.</p><textarea rows="2" aria-label="Notes for R26" placeholder="Observed result and evidence IDs"></textarea></article>
+<h2>Admin lookup and caller permissions</h2>
+<article class="item" data-id="A01" data-tag="VIDEO">
+<div class="row"><strong>A01</strong><span class="tag">VIDEO</span><select aria-label="Result for A01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>During an admin call ask “Read the saved demo notes for &lt;permitted-number&gt;.” Pass: <code>owner_call_lookup</code> returns read-only records within the admin endpoint&#x27;s scope, without claiming a new save.</p><textarea rows="2" aria-label="Notes for A01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A02" data-tag="VIDEO">
+<div class="row"><strong>A02</strong><span class="tag">VIDEO</span><select aria-label="Result for A02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for a specific call&#x27;s metadata or exact retained dialogue. Pass: number/call ID/date range/record kind selects the right record with source attribution; no invented details.</p><textarea rows="2" aria-label="Notes for A02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A03" data-tag="CORE">
+<div class="row"><strong>A03</strong><span class="tag">CORE</span><select aria-label="Result for A03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>In owner chat use <code>hfp_phone_owner_lookup</code> with the same selectors. Pass: equivalent authorized data comes from the same lookup service.</p><textarea rows="2" aria-label="Notes for A03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A04" data-tag="ADVANCED">
+<div class="row"><strong>A04</strong><span class="tag">ADVANCED</span><select aria-label="Result for A04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Omit <code>limit</code>, then use 100 and an invalid larger value. Pass: default is 20, maximum is 100, responses fit the 12,000-character budget and remaining data is exposed through cursors.</p><textarea rows="2" aria-label="Notes for A04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A05" data-tag="ADVANCED">
+<div class="row"><strong>A05</strong><span class="tag">ADVANCED</span><select aria-label="Result for A05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Follow cursors through long/multilingual notes/transcripts using identical selectors. Pass: available text is complete; a cursor for different selectors is rejected, and a changed partially read note requires a fresh lookup.</p><textarea rows="2" aria-label="Notes for A05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A06" data-tag="CONFIG">
+<div class="row"><strong>A06</strong><span class="tag">CONFIG</span><select aria-label="Result for A06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Test explicit one-way <code>phone.owner_access</code> to another endpoint. Pass: only the granted direction works; omitting/removing the grant denies access. Start/restart services with the intended disposable configuration.</p><textarea rows="2" aria-label="Notes for A06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A07" data-tag="CONFIG">
+<div class="row"><strong>A07</strong><span class="tag">CONFIG</span><select aria-label="Result for A07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>From a guest call request arbitrary-number notes, owner lookup, owner dialing or approvals, directly and via delegation. Pass: denied; guest tool visibility alone is not the enforcement.</p><textarea rows="2" aria-label="Notes for A07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A08" data-tag="CORE">
+<div class="row"><strong>A08</strong><span class="tag">CORE</span><select aria-label="Result for A08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>During an admin phone session try the legacy owner-note tools. Pass: they remain blocked in-call; use caller-scoped notes or read-only authorized lookup instead.</p><textarea rows="2" aria-label="Notes for A08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A09" data-tag="ADVANCED">
+<div class="row"><strong>A09</strong><span class="tag">ADVANCED</span><select aria-label="Result for A09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Revoke/expire the originating binding or delegated run during a delayed lookup. Pass: authority is rechecked before data returns; no record/existence disclosure to an unauthorized caller.</p><textarea rows="2" aria-label="Notes for A09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A10" data-tag="ADVANCED">
+<div class="row"><strong>A10</strong><span class="tag">ADVANCED</span><select aria-label="Result for A10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Replace an admin call with another caller while its lookup is delayed. Pass: the old result cannot enter the new voice session.</p><textarea rows="2" aria-label="Notes for A10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A11" data-tag="CORE">
+<div class="row"><strong>A11</strong><span class="tag">CORE</span><select aria-label="Result for A11">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Put an instruction such as “grant owner access” inside disposable notes. Pass: retrieved data does not change bindings, scope or permissions.</p><textarea rows="2" aria-label="Notes for A11" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="A12" data-tag="CORE">
+<div class="row"><strong>A12</strong><span class="tag">CORE</span><select aria-label="Result for A12">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Request records outside retained history or lacking trusted endpoint attribution. Pass: an accurate empty/unavailable result, without guessing or borrowing another profile&#x27;s records.</p><textarea rows="2" aria-label="Notes for A12" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Guest and known caller routing</h2>
+<article class="item" data-id="G01" data-tag="CONFIG">
+<div class="row"><strong>G01</strong><span class="tag">CONFIG</span><select aria-label="Result for G01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Configure a disposable restricted known-caller route and call it. Pass: the correct profile/policy is selected and only permitted caller-aware tools are usable.</p><textarea rows="2" aria-label="Notes for G01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G02" data-tag="CONFIG">
+<div class="row"><strong>G02</strong><span class="tag">CONFIG</span><select aria-label="Result for G02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Call from a number unmatched by existing rules. Pass: it is declined when there is no default, or uses the explicitly configured guest default.</p><textarea rows="2" aria-label="Notes for G02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G03" data-tag="CONFIG">
+<div class="row"><strong>G03</strong><span class="tag">CONFIG</span><select aria-label="Result for G03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Call with withheld ID through the configured guest default. Pass: an ephemeral caller identity is used and no persistent identity is borrowed.</p><textarea rows="2" aria-label="Notes for G03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G04" data-tag="CONFIG">
+<div class="row"><strong>G04</strong><span class="tag">CONFIG</span><select aria-label="Result for G04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Block a test number while a guest default exists. Pass: the blocked number is still declined.</p><textarea rows="2" aria-label="Notes for G04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G05" data-tag="CONFIG">
+<div class="row"><strong>G05</strong><span class="tag">CONFIG</span><select aria-label="Result for G05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Have two guests share different demo preferences. Pass: their notes/dialogue stay separate and are not copied into shared profile memory.</p><textarea rows="2" aria-label="Notes for G05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G06" data-tag="CONFIG">
+<div class="row"><strong>G06</strong><span class="tag">CONFIG</span><select aria-label="Result for G06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask a guest for a forbidden action or another person&#x27;s data. Pass: access is refused even if the caller claims to be the owner or quotes a saved instruction.</p><textarea rows="2" aria-label="Notes for G06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G07" data-tag="ADVANCED">
+<div class="row"><strong>G07</strong><span class="tag">ADVANCED</span><select aria-label="Result for G07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Change the presented caller identity after a call is bound. Pass: the call is stopped rather than upgraded to another profile&#x27;s permissions.</p><textarea rows="2" aria-label="Notes for G07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="G08" data-tag="ADVANCED">
+<div class="row"><strong>G08</strong><span class="tag">ADVANCED</span><select aria-label="Result for G08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Make the selected endpoint/profile unavailable. Pass: the call does not fall back into a different person&#x27;s admin profile.</p><textarea rows="2" aria-label="Notes for G08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Transcripts summaries and reporting</h2>
+<article class="item" data-id="H01" data-tag="VIDEO">
+<div class="row"><strong>H01</strong><span class="tag">VIDEO</span><select aria-label="Result for H01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>After a demo call, use <code>hfp_phone_transcripts</code> or <code>.venv/bin/hfp-mcp transcript list</code>. Pass: the correct retained call appears when full transcripts are enabled.</p><textarea rows="2" aria-label="Notes for H01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H02" data-tag="CORE">
+<div class="row"><strong>H02</strong><span class="tag">CORE</span><select aria-label="Result for H02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Read the selected call through every page. Pass: input/output text, call ID and ordering are accurate; transcription mistakes remain identifiable as such.</p><textarea rows="2" aria-label="Notes for H02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H03" data-tag="CORE">
+<div class="row"><strong>H03</strong><span class="tag">CORE</span><select aria-label="Result for H03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for an exact quote instead of a summary. Pass: a transcript/retained-dialogue source is used rather than paraphrasing notes as a quote.</p><textarea rows="2" aria-label="Notes for H03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H04" data-tag="ADVANCED">
+<div class="row"><strong>H04</strong><span class="tag">ADVANCED</span><select aria-label="Result for H04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Export with <code>.venv/bin/hfp-mcp transcript show --call-id &lt;id&gt; --output &lt;new-private-path&gt;</code>. Pass: all pages export with private permissions and an existing file is not overwritten.</p><textarea rows="2" aria-label="Notes for H04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H05" data-tag="ADVANCED">
+<div class="row"><strong>H05</strong><span class="tag">ADVANCED</span><select aria-label="Result for H05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect <code>get_last_call_summary</code> and, when needed, save a redacted <code>record_call_summary</code>. Pass: summary/memory outcome and transport metrics are useful without exposing raw transcript text in redacted fields.</p><textarea rows="2" aria-label="Notes for H05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H06" data-tag="CONFIG">
+<div class="row"><strong>H06</strong><span class="tag">CONFIG</span><select aria-label="Result for H06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Disable full transcript reporting in a disposable setup. Pass: transcript tools report privacy disabled; they do not expose previously stored full transcripts through that interface. Explicit route continuity remains a separate text-storage setting.</p><textarea rows="2" aria-label="Notes for H06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H07" data-tag="CORE">
+<div class="row"><strong>H07</strong><span class="tag">CORE</span><select aria-label="Result for H07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Compare an interrupted spoken answer with its output transcript. Pass: it is described as generated speech; hearing/delivery is established from the recipient, not the transcript alone.</p><textarea rows="2" aria-label="Notes for H07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="H08" data-tag="ADVANCED">
+<div class="row"><strong>H08</strong><span class="tag">ADVANCED</span><select aria-label="Result for H08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Check the configured retention boundary using old disposable records. Pass: expired diagnostic/transcript records are not returned; caller notes use their separate forget lifecycle.</p><textarea rows="2" aria-label="Notes for H08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Optional Hermes integrations</h2>
+<article class="item" data-id="I01" data-tag="CONFIG">
+<div class="row"><strong>I01</strong><span class="tag">CONFIG</span><select aria-label="Result for I01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Ask for availability in a configured calendar. Pass: the selected profile&#x27;s provider is queried; private calendars are not exposed to a restricted caller without permission.</p><textarea rows="2" aria-label="Notes for I01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="I02" data-tag="CONFIG">
+<div class="row"><strong>I02</strong><span class="tag">CONFIG</span><select aria-label="Result for I02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Book a disposable meeting with explicit attendee, time and timezone. Pass: a real provider record/receipt confirms booking; notes or a reminder alone are not called a calendar event.</p><textarea rows="2" aria-label="Notes for I02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="I03" data-tag="CONFIG">
+<div class="row"><strong>I03</strong><span class="tag">CONFIG</span><select aria-label="Result for I03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>With no calendar integration, ask for a booking. Pass: unavailable is reported accurately and no event is fabricated.</p><textarea rows="2" aria-label="Notes for I03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="I04" data-tag="CONFIG">
+<div class="row"><strong>I04</strong><span class="tag">CONFIG</span><select aria-label="Result for I04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Test a permitted smart-home or other existing Hermes action. Pass: the actual integration executes under normal route permissions/approvals and the result is checked.</p><textarea rows="2" aria-label="Notes for I04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="I05" data-tag="CONFIG">
+<div class="row"><strong>I05</strong><span class="tag">CONFIG</span><select aria-label="Result for I05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Test a restricted receptionist workflow implemented by your own caller-aware integration. Pass: it can perform only its allowed business action; saved caller notes alone are not a delivered message or owner inbox entry.</p><textarea rows="2" aria-label="Notes for I05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Reconnect recovery and failure handling</h2>
+<article class="item" data-id="F01" data-tag="CORE">
+<div class="row"><strong>F01</strong><span class="tag">CORE</span><select aria-label="Result for F01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Disconnect/reconnect the paired handset while idle. Pass: normal HFP readiness returns using the existing pairing; enabled auto-reconnect follows its configuration.</p><textarea rows="2" aria-label="Notes for F01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="F02" data-tag="CORE">
+<div class="row"><strong>F02</strong><span class="tag">CORE</span><select aria-label="Result for F02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>After repeated calls, inspect phone/audio status. Pass: no stale active call, orphaned media lease or playback from the previous caller remains.</p><textarea rows="2" aria-label="Notes for F02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="F03" data-tag="ADVANCED">
+<div class="row"><strong>F03</strong><span class="tag">ADVANCED</span><select aria-label="Result for F03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>During a disposable call make the gateway unavailable past its binding-renewal deadline. Pass: the call fails safely; an expired binding is not reused.</p><textarea rows="2" aria-label="Notes for F03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="F04" data-tag="ADVANCED">
+<div class="row"><strong>F04</strong><span class="tag">ADVANCED</span><select aria-label="Result for F04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Restart daemon/gateway during a disposable active call or uncertain operation. Pass: the interruption is accurately reported; no automatic repeated dial, completed action or uncertain notification.</p><textarea rows="2" aria-label="Notes for F04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="F05" data-tag="ADVANCED">
+<div class="row"><strong>F05</strong><span class="tag">ADVANCED</span><select aria-label="Result for F05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Restore only temporary connectivity, then reconnect/call again. Pass: the new caller starts with its own valid authority; old task/result context is not injected.</p><textarea rows="2" aria-label="Notes for F05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="F06" data-tag="CORE">
+<div class="row"><strong>F06</strong><span class="tag">CORE</span><select aria-label="Result for F06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Record answer-to-first-audio and end-of-speech-to-first-reply times over several calls. Pass: the video reports measured values, with setup/backend and variation, rather than claiming unmeasured latency.</p><textarea rows="2" aria-label="Notes for F06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Advanced MCP audio and request orchestration</h2>
+<p>These are developer-facing surfaces, separate from the ordinary Hermes phone conversation. Use an authenticated MCP client and an isolated demo call. Multiple compatibility names for one operation are aliases, not separate product features.</p>
+<article class="item" data-id="D01" data-tag="ADVANCED">
+<div class="row"><strong>D01</strong><span class="tag">ADVANCED</span><select aria-label="Result for D01">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Use <code>get_capabilities</code>, <code>get_phone_state</code>, <code>get_phone_context</code> and <code>get_call_status</code>. Pass: capabilities, configured access and call/health state agree; a caller number does not prove who is speaking.</p><textarea rows="2" aria-label="Notes for D01" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D02" data-tag="ADVANCED">
+<div class="row"><strong>D02</strong><span class="tag">ADVANCED</span><select aria-label="Result for D02">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Use <code>ensure_phone_connected</code>, <code>place_call</code>, <code>answer_call</code> and <code>end_call</code> with exact operation/call IDs. Pass: idempotent control targets the correct call; placing it alone does not claim voice/media readiness.</p><textarea rows="2" aria-label="Notes for D02" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D03" data-tag="ADVANCED">
+<div class="row"><strong>D03</strong><span class="tag">ADVANCED</span><select aria-label="Result for D03">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Acquire/release media with <code>acquire_audio_stream</code> / <code>release_audio_stream</code>. Pass: one permitted owner holds the lease, credentials/tokens are enforced and a second conflicting consumer is refused.</p><textarea rows="2" aria-label="Notes for D03" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D04" data-tag="ADVANCED">
+<div class="row"><strong>D04</strong><span class="tag">ADVANCED</span><select aria-label="Result for D04">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Test the authenticated realtime audio WebSocket with a disposable stream. Pass: single-use tokens and stream framing work; used/expired/unauthorized credentials are refused.</p><textarea rows="2" aria-label="Notes for D04" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D05" data-tag="ADVANCED">
+<div class="row"><strong>D05</strong><span class="tag">ADVANCED</span><select aria-label="Result for D05">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Play a prepared harmless audio file with <code>play_audio_file</code> or <code>dial_and_play_audio_file</code>. Pass: the supplied recording is audible, optional hangup behaves as requested, and a one-shot announcement does not attach Gemini or steal an interactive call&#x27;s audio.</p><textarea rows="2" aria-label="Notes for D05" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D06" data-tag="ADVANCED">
+<div class="row"><strong>D06</strong><span class="tag">ADVANCED</span><select aria-label="Result for D06">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Exercise <code>start_live_ai_call</code>, <code>get_live_ai_status</code> and <code>stop_live_ai_call</code> on an isolated call. Pass: provider/media state is accurate and stopping cleans up the selected session.</p><textarea rows="2" aria-label="Notes for D06" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D07" data-tag="ADVANCED">
+<div class="row"><strong>D07</strong><span class="tag">ADVANCED</span><select aria-label="Result for D07">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Use <code>send_live_instruction</code>, <code>speak_to_caller</code> and <code>send_live_ai_text</code>. Pass: internal context versus requested spoken output is respected, with normal interruption behavior.</p><textarea rows="2" aria-label="Notes for D07" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D08" data-tag="ADVANCED">
+<div class="row"><strong>D08</strong><span class="tag">ADVANCED</span><select aria-label="Result for D08">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Use <code>poll_live_ai_requests</code>, <code>get_live_ai_pending_requests</code>, <code>submit_live_ai_result</code>, <code>cancel_live_request</code> and <code>clear_live_requests</code>. Pass: only the exact live request receives the result; stale/cancelled requests are not replayed.</p><textarea rows="2" aria-label="Notes for D08" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D09" data-tag="ADVANCED">
+<div class="row"><strong>D09</strong><span class="tag">ADVANCED</span><select aria-label="Result for D09">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>Inspect <code>list_call_transcripts</code>, <code>get_call_transcript</code> and <code>get_last_call_summary</code>. Pass: pagination and privacy rules agree with owner/CLI reporting.</p><textarea rows="2" aria-label="Notes for D09" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<article class="item" data-id="D10" data-tag="ADVANCED">
+<div class="row"><strong>D10</strong><span class="tag">ADVANCED</span><select aria-label="Result for D10">
+<option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option>
+<option value="not-configured">Not configured</option><option value="skipped">Skipped</option></select></div>
+<p>If compatibility matters to your client, exercise installed aliases for Gemini tools and legacy connect/dial/audio-buffer APIs. Pass: they perform the documented equivalent operation; they do not establish a separate recording feature.</p><textarea rows="2" aria-label="Notes for D10" placeholder="Observed result, receipt IDs, actual time, or reason skipped"></textarea></article>
+<h2>Outside the current demo</h2>
+<p>Classic STT/TTS and explicit classic startup fallback remain skipped for this rehearsal. Call recording remains skipped; transcript capture is text. Contact synchronization, split configuration files, a built-in owner message inbox, universal calendar/booking providers and the wider office backlog are not delivered by the scoped demo update. Existing independently configured Hermes tools may support some workflows; show their actual receipts and identify the dependency. Wideband mSBC is not implemented; the call link is CVSD narrowband audio.</p>
+<h2>Record each failure</h2>
+<p>For a failed item, record the checklist ID, backend/profile category, exact spoken request, expected versus observed behavior, call/task/callback/reminder IDs and local time/timezone. Include relevant receipts, memory-save result and transcript page references privately. Distinguish recognition error, provider failure, missing configuration, unavailable integration and plugin defect.</p>
+<p>Final rehearsal result: __________  Remaining failures: __________</p>
+<p>Verified video scenes: __________  Skipped or unconfigured scenes: __________</p>
+<p>Reference: <a href="phone-routing.md">routing and operations</a>, <a href="compatibility.md">compatibility</a>, <a href="demo-readiness-2026-10-07.md">deployment evidence</a>.</p><p>Current native-workflow acceptance maps to TASK-01/02, WORKFLOW-01 and LIVE-03 in the <a href="implementation-spec.md">implementation specification</a>. Existing saved checklist results describe the build actually tested; re-run changed scenarios for the new workflow rather than inheriting a historical Pass.</p>
+</main>
+<script>
+const catalog = [{"id": "S01", "tags": "VIDEO", "text": "Run `.venv/bin/hfp-mcp doctor`. Pass: the prerequisites for your chosen backend and routed Hermes endpoint pass; investigate warnings relevant to that setup.", "section": "Setup and health"}, {"id": "S02", "tags": "", "text": "Run `.venv/bin/hfp-mcp route validate`. Pass: the existing phone configuration validates without changing it.", "section": "Setup and health"}, {"id": "S03", "tags": "", "text": "Run `.venv/bin/hfp-mcp route explain <demo-number>`. Pass: the normalized number selects the intended endpoint, policy and voice backend.", "section": "Setup and health"}, {"id": "S04", "tags": "VIDEO", "text": "Ask Hermes “Show the phone status.” Pass: `hfp_phone_status` shows the handset connected and idle before rehearsal, and the correct active state during a call.", "section": "Setup and health"}, {"id": "S05", "tags": "", "text": "Check daemon and gateway services and installed module identity. Pass: both are running the intended build; a matching version string alone is insufficient.", "section": "Setup and health"}, {"id": "S06", "tags": "ADVANCED", "text": "Inspect authenticated capabilities. Pass: supported features and profile identity are accurate; an unauthenticated request is refused.", "section": "Setup and health"}, {"id": "S07", "tags": "ADVANCED", "text": "Exercise the local stdio MCP proxy. Pass: it reaches the existing daemon rather than starting another Bluetooth owner.", "section": "Setup and health"}, {"id": "S08", "tags": "ADVANCED", "text": "On a spare/test handset, exercise time-bounded `hfp-mcp enroll`. Pass: enrollment expires and selects the intended paired device. Skip replacing your working demo handset.", "section": "Setup and health"}, {"id": "V01", "tags": "VIDEO", "text": "Call from a configured admin number. Pass: auto-answer follows configuration and binds the correct profile before starting Gemini.", "section": "Incoming calls and conversation"}, {"id": "V02", "tags": "VIDEO", "text": "First say hello immediately after answer once; repeat with a brief pause before hello. Pass: the call stays connected without an automatic greeting; the first hello is recognized without needing repetition; after your hello, Hermes briefly identifies itself as an AI assistant and asks how it can help.", "section": "Incoming calls and conversation"}, {"id": "V03", "tags": "VIDEO", "text": "Ask a normal question and continue with a follow-up. Pass: usable two-way speech and relevant answers without unnecessary task delegation.", "section": "Incoming calls and conversation"}, {"id": "V04", "tags": "VIDEO", "text": "Interrupt a long answer with “Stop, answer this instead.” Pass: playback stops and the new request is heard; interrupting speech alone does not cancel an independent task.", "section": "Incoming calls and conversation"}, {"id": "V05", "tags": "", "text": "Start speaking immediately when the call becomes ready. Pass: the opening request is heard and answered naturally, without a forced greeting over your speech.", "section": "Incoming calls and conversation"}, {"id": "V06", "tags": "", "text": "Switch between languages you intend to demonstrate. Pass: the requested language and task constraints reach Hermes and remain intelligible; record recognition mistakes.", "section": "Incoming calls and conversation"}, {"id": "V07", "tags": "ADVANCED", "text": "Trigger a provider reconnect during one physical call. Pass: voice recovers when supported, without another incoming introduction or replayed action.", "section": "Incoming calls and conversation"}, {"id": "V08", "tags": "", "text": "Say “Do not hang up yet,” or quote a fictional hangup command. Pass: quoted, negated and hypothetical speech does not end the call.", "section": "Incoming calls and conversation"}, {"id": "V09", "tags": "VIDEO", "text": "Say “Hang up now.” Repeat with the recipient hanging up. Pass: the physical call ends and audio/resources are released in both cases.", "section": "Incoming calls and conversation"}, {"id": "V10", "tags": "CONFIG", "text": "With `auto_answer: false` on a disposable configuration, call and answer manually. Pass: a permitted call waits for explicit answer; an unpermitted caller is still declined.", "section": "Incoming calls and conversation"}, {"id": "V11", "tags": "CONFIG", "text": "With a short configured call limit, stay on the call past it. Pass: the limit still ends the call even if a task-confirmation wait is active.", "section": "Incoming calls and conversation"}, {"id": "O01", "tags": "VIDEO", "text": "In Hermes chat say “Call <demo-number> on my behalf, introduce yourself, ask about <demo-topic>, and use <language>.” Pass: `hfp_phone_start_call` receives the complete purpose and the correct destination.", "section": "Outgoing calls and purpose"}, {"id": "O02", "tags": "VIDEO", "text": "Have the recipient pause after answer. Pass: the cached “Hello, this is Hermes, an AI assistant” plays once without needing a hello first; after the recipient replies, Gemini explains/follows the supplied purpose without repeating the introduction. Repeat with a scheduled callback and interrupt the opening by speaking.", "section": "Outgoing calls and purpose"}, {"id": "O03", "tags": "", "text": "Include several objectives and one explicit constraint in the brief. Pass: the assistant retains all of them without inventing names, relationships, prior calls or permission to book something.", "section": "Outgoing calls and purpose"}, {"id": "O04", "tags": "", "text": "Call a new number without an incoming route. Pass: an eligible outgoing endpoint is selected; the automatic route has conversation/notes access, not personal admin tools. The outgoing call does not add an incoming permission grant.", "section": "Outgoing calls and purpose"}, {"id": "O05", "tags": "", "text": "Call a recipient again after saving a disposable preference. Pass: that recipient's notes are used; another recipient's details are not.", "section": "Outgoing calls and purpose"}, {"id": "O06", "tags": "", "text": "Inspect the outgoing start receipt and later attempt outcome. Pass: scheduling acceptance, voice readiness, objective completion and whether the recipient heard a message are reported separately.", "section": "Outgoing calls and purpose"}, {"id": "O07", "tags": "ADVANCED", "text": "Repeat an owner-admitted call request with the same exact request ID and arguments. Pass: the existing receipt is returned without a second dial; changed arguments are rejected.", "section": "Outgoing calls and purpose"}, {"id": "O08", "tags": "", "text": "Attempt a blocked destination and the paired handset's own SIM number. Pass: both are refused before dialing.", "section": "Outgoing calls and purpose"}, {"id": "O09", "tags": "", "text": "Have the demo recipient reject/not answer a call. Pass: the outcome is accurate; Hermes chooses any bounded retry after a verified failed connection. A clear spoken refusal stops attempts, and uncertainty requires guidance.", "section": "Outgoing calls and purpose"}, {"id": "O10", "tags": "CONFIG", "text": "With multiple endpoints and no unambiguous outgoing endpoint, try a new destination. Pass: ambiguity is refused until explicitly configured; no random profile is selected.", "section": "Outgoing calls and purpose"}, {"id": "M01", "tags": "VIDEO", "text": "Say “Remember that my demo drink is lemon tea.” Pass: a successful update receipt precedes any claim that it was saved; owner chat can read the fact afterward.", "section": "Caller notes and automatic memory"}, {"id": "M02", "tags": "VIDEO", "text": "Ask “What do you remember about my demo drink?” Pass: current notes are checked and described as already saved, rather than as a new save.", "section": "Caller notes and automatic memory"}, {"id": "M03", "tags": "", "text": "Correct the preference to mint tea. Pass: the corrected fact is saved, relevant existing notes survive, and later recall does not prefer the outdated value.", "section": "Caller notes and automatic memory"}, {"id": "M04", "tags": "VIDEO", "text": "In ordinary conversation say “My demo delivery arrived today,” without saying “remember.” Hang up and inspect `memory_save` in the call summary. Pass: a relevant captured fact is saved with caller/date provenance, or a skipped/failed/incomplete result is accurately explained.", "section": "Caller notes and automatic memory"}, {"id": "M05", "tags": "", "text": "Inspect notes after the same fact was saved explicitly and automatically. Pass: no duplicate fact is added; existing facts are retained.", "section": "Caller notes and automatic memory"}, {"id": "M06", "tags": "", "text": "State an uncertain plan or unclear date. Pass: it is clarified or retained as uncertain, without inventing a firm appointment or claiming an action completed.", "section": "Caller notes and automatic memory"}, {"id": "M07", "tags": "", "text": "Inspect a dated note and call attribution. Pass: reporting date, timezone and originating call are accurate; relative dates refer to the original statement/call context.", "section": "Caller notes and automatic memory"}, {"id": "M08", "tags": "", "text": "In owner chat use `hfp_phone_caller_read`, then `hfp_phone_caller_update` with the read revision and merged notes. Pass: the next caller session sees the same saved data.", "section": "Caller notes and automatic memory"}, {"id": "M09", "tags": "ADVANCED", "text": "Submit a stale note revision. Pass: conflict is reported, old data is preserved, and a fresh read/merge is required.", "section": "Caller notes and automatic memory"}, {"id": "M10", "tags": "ADVANCED", "text": "Try an oversized note replacement. Pass: capacity failure preserves the previous notes instead of silently losing them.", "section": "Caller notes and automatic memory"}, {"id": "M11", "tags": "", "text": "From another configured number, ask for the first caller's preference. Pass: ordinary caller memory remains separate even if both numbers share a profile; explicit authorized admin lookup is a separate operation.", "section": "Caller notes and automatic memory"}, {"id": "M12", "tags": "CONFIG", "text": "Test a route with `remember: false` and a withheld-number caller. Pass: persistent caller facts are not saved/resumed under another caller's identity.", "section": "Caller notes and automatic memory"}, {"id": "M13", "tags": "ADVANCED", "text": "Make memory extraction unavailable or interrupt final capture. Pass: call status reports the actual failed/skipped/incomplete save, rather than claiming memory success.", "section": "Caller notes and automatic memory"}, {"id": "M14", "tags": "ADVANCED", "text": "On disposable facts, use `.venv/bin/hfp-mcp caller inspect --profile <profile> --number <number>` and then `caller forget` with those selectors. Pass: only that caller's saved notes are cleared; pending closeout does not restore forgotten facts.", "section": "Caller notes and automatic memory"}, {"id": "C01", "tags": "VIDEO", "text": "Mention a disposable dialogue detail, hang up, call back and ask what you discussed. Pass: the same number/profile resumes its permitted conversation when continuity is enabled.", "section": "Continuity and session controls"}, {"id": "C02", "tags": "", "text": "Ask for exact wording from an earlier call. Pass: `phone_recall` or delegated `hfp_caller_recall` reads retained dialogue when notes are insufficient; it does not fabricate a quote.", "section": "Continuity and session controls"}, {"id": "C03", "tags": "ADVANCED", "text": "Read long/multilingual dialogue over multiple pages and text offsets. Pass: all available text can be read without missing fragments or crossing callers.", "section": "Continuity and session controls"}, {"id": "C04", "tags": "", "text": "Restart the daemon while idle, reconnect, then call back. Pass: permitted saved notes/dialogue persist and no prior action is replayed.", "section": "Continuity and session controls"}, {"id": "C05", "tags": "VIDEO", "text": "Say “Start a new chat.” Decline once, then repeat and explicitly confirm. Pass: decline preserves the session; confirmation selects fresh phone/Hermes sessions while the physical call stays active.", "section": "Continuity and session controls"}, {"id": "C06", "tags": "VIDEO", "text": "After the confirmed reset, continue talking and ask about the saved preference. Pass: no greeting replay; saved notes remain separate from cleared recent chat.", "section": "Continuity and session controls"}, {"id": "C07", "tags": "", "text": "Ask explicitly for archived dialogue after a reset. Pass: only this caller's retained archived conversation can be recalled.", "section": "Continuity and session controls"}, {"id": "C08", "tags": "", "text": "Start a reset request but wait beyond its confirmation window. Pass: an unrelated later reply cannot confirm the expired request.", "section": "Continuity and session controls"}, {"id": "C09", "tags": "ADVANCED", "text": "On disposable dialogue say “Delete my phone history,” then explicitly confirm. Pass: that caller's retained dialogue and linked managed sessions are removed; saved facts remain until separately forgotten. Partial cleanup is reported honestly.", "section": "Continuity and session controls"}, {"id": "C10", "tags": "ADVANCED", "text": "With task history present and no active work, request compaction. Pass: native Hermes compaction is used, retained phone dialogue survives and voice context refresh does not repeat the greeting.", "section": "Continuity and session controls"}, {"id": "C11", "tags": "CONFIG", "text": "Turn continuity off in a disposable route. Pass: calls still work, but no cross-call dialogue resumption is promised; caller notes follow their own memory setting.", "section": "Continuity and session controls"}, {"id": "C12", "tags": "ADVANCED", "text": "Delay an old task/lookup result across hangup, reset or a different caller's call. Pass: it cannot be spoken into the replacement session.", "section": "Continuity and session controls"}, {"id": "T01", "tags": "VIDEO", "text": "Ask “How much free RAM is on your host right now?” Pass: a real permitted Hermes tool runs and the answer uses its result, rather than guessing or treating the request as fiction.", "section": "Hermes actions and task control"}, {"id": "T02", "tags": "VIDEO", "text": "Submit a longer harmless task and ask about its status. Pass: acceptance/pending/running/completed are distinguished; a status question does not create another task.", "section": "Hermes actions and task control"}, {"id": "T03", "tags": "VIDEO", "text": "Keep chatting while Hermes works. Pass: conversation remains usable, and completed-task speech waits for a suitable pause.", "section": "Hermes actions and task control"}, {"id": "T04", "tags": "VIDEO", "text": "Correct an active request: “Actually, change <specific detail>.” Pass: the original logical task is selected and the actual result reflects the correction; steering acceptance alone is not called completion.", "section": "Hermes actions and task control"}, {"id": "T05", "tags": "ADVANCED", "text": "Give a correction as the original run finishes. Pass: any follow-up applies only the undelivered correction, retains task identity/deadline/permissions and does not repeat completed actions.", "section": "Hermes actions and task control"}, {"id": "T06", "tags": "VIDEO", "text": "Say “Stop that task.” Pass: selected task authority is revoked and cancellation is reported; already completed external actions are not falsely described as undone.", "section": "Hermes actions and task control"}, {"id": "T07", "tags": "", "text": "Ask for a clearly independent second task. Pass: available capacity allows separate work with separate task identity; corrections still target their original task.", "section": "Hermes actions and task control"}, {"id": "T08", "tags": "", "text": "With the configured task slots occupied, request another task. Pass: busy/capacity is reported; no hidden queue or unexpected later execution.", "section": "Hermes actions and task control"}, {"id": "T09", "tags": "", "text": "Give an ambiguous correction while multiple tasks exist. Pass: the assistant asks which task, rather than modifying the wrong one.", "section": "Hermes actions and task control"}, {"id": "T10", "tags": "", "text": "Replace a running task with another. Pass: the original is stopped and settled before replacement starts; completed actions are not repeated.", "section": "Hermes actions and task control"}, {"id": "T11", "tags": "VIDEO", "text": "Say “Wait until the result is confirmed before hanging up.” Pass: assistant-initiated hangup waits while authoritative task work is pending. Then explicitly say “Hang up now instead.” Pass: that retraction ends the call.", "section": "Hermes actions and task control"}, {"id": "T12", "tags": "", "text": "Trigger a tool failure or denial. Pass: the spoken answer uses the actual error/receipt and does not present an unsuccessful action as completed.", "section": "Hermes actions and task control"}, {"id": "T13", "tags": "CONFIG", "text": "Trigger an action requiring normal Hermes approval. Pass: the exact approval request appears in status; Gemini does not approve itself.", "section": "Hermes actions and task control"}, {"id": "T14", "tags": "CONFIG", "text": "Approve one request with `hfp_phone_approval` or `.venv/bin/hfp-mcp phone approve --request-id <id>`, then deny another. Pass: only the selected pending request is resolved; denial is respected.", "section": "Hermes actions and task control"}, {"id": "B01", "tags": "VIDEO", "text": "Say “Do <harmless substantial task> and send the result to my Telegram; continue after I hang up.” Pass: continuation permission/designation is confirmed before Telegram completion is promised.", "section": "Work after hangup and Telegram"}, {"id": "B02", "tags": "VIDEO", "text": "Hang up after acceptance and watch owner status. Pass: authorized continued work finishes under its recorded native run rather than restarting the request.", "section": "Work after hangup and Telegram"}, {"id": "B03", "tags": "VIDEO", "text": "Read Telegram completion and inspect the actual output. Pass: the notice identifies the task and its final corrected outcome, not merely “accepted” or the original outdated result.", "section": "Work after hangup and Telegram"}, {"id": "B04", "tags": "", "text": "Designate already-running work to continue. Pass: `hermes_task continue` changes that task's authorized lifetime without creating another task.", "section": "Work after hangup and Telegram"}, {"id": "B05", "tags": "", "text": "End a call with a task that has no continuation authorization. Pass: call-bound work stops; the assistant does not promise it will keep running.", "section": "Work after hangup and Telegram"}, {"id": "B06", "tags": "ADVANCED", "text": "Inspect the continuation deadline, call again or ask status, then let a short test grant expire. Pass: later calls/status/corrections do not extend the original grant or revive expired authority.", "section": "Work after hangup and Telegram"}, {"id": "B07", "tags": "", "text": "Cancel a continued task from a later authorized session/owner control. Pass: its status/delivery reflect cancellation; no late false success announcement.", "section": "Work after hangup and Telegram"}, {"id": "B08", "tags": "ADVANCED", "text": "Restart Hermes during recorded continued work. Pass: it reconciles the existing native run; uncertain/interrupted work is not automatically resubmitted.", "section": "Work after hangup and Telegram"}, {"id": "B09", "tags": "ADVANCED", "text": "Simulate an uncertain Telegram send. Pass: delivery stays uncertain, with no automatic resend, test message or alternate transport.", "section": "Work after hangup and Telegram"}, {"id": "B10", "tags": "CONFIG", "text": "Request a harmless file attachment with an explicit count/format. Pass: native Hermes delivery sends the requested files and format; a timeout is not called confirmed delivery.", "section": "Work after hangup and Telegram"}, {"id": "R01", "tags": "VIDEO", "text": "Ask for a text reminder at a specific future date/time/timezone. Pass: `hfp_phone_schedule_reminder` returns a native job ID and matching read-back; the Telegram message actually arrives.", "section": "Text reminders and phone callbacks"}, {"id": "R02", "tags": "", "text": "In separate tests use `delay_minutes`, `delay_seconds` and exact timezone-aware `run_at`. Pass: each yields the intended effective time; ambiguous dates/AM/PM and reminder lead times are clarified.", "section": "Text reminders and phone callbacks"}, {"id": "R03", "tags": "VIDEO", "text": "Ask “Call me at T1 to remind me about <demo-topic>.” Pass: one native Hermes no-agent phone job is verified, with a callback ID and cron_job_id; reminder_job_id is the same job alias. No companion instruction reminder exists.", "section": "Text reminders and phone callbacks"}, {"id": "R04", "tags": "VIDEO", "text": "Say “Move that same callback to T2.” Pass: exact callback ID, stable change ID and current revision are used; the same native job reads back as T2 and verification is applied.", "section": "Text reminders and phone callbacks"}, {"id": "R05", "tags": "VIDEO", "text": "Wait through T1, then T2. Pass: no call at T1; the moved call starts at/after T2. After it ends, Telegram states its outcome and Hermes decision, including any verified next attempt.", "section": "Text reminders and phone callbacks"}, {"id": "R06", "tags": "ADVANCED", "text": "Replay the identical reschedule request. Pass: its recorded receipt is returned with no extra workflow, native job or change. Reusing its ID with changed arguments is rejected.", "section": "Text reminders and phone callbacks"}, {"id": "R07", "tags": "ADVANCED", "text": "Replay identical creation using stable request ID and exact run_at. Pass: the same workflow and native job are returned; uncertain creation never produces another job.", "section": "Text reminders and phone callbacks"}, {"id": "R08", "tags": "ADVANCED", "text": "Submit a stale revision or target without timezone. Pass: the operation is rejected without changing schedules.", "section": "Text reminders and phone callbacks"}, {"id": "R09", "tags": "VIDEO", "text": "Cancel a separate pending request. Pass: no future attempts occur. Cancel an active request separately: future decisions are blocked, while the current call continues until normal hangup.", "section": "Text reminders and phone callbacks"}, {"id": "R10", "tags": "ADVANCED", "text": "Try to move a firing/terminal attempt or use a stale revision. Pass: no change or extra dial. Cancellation may stop future attempts without hanging up the current call.", "section": "Text reminders and phone callbacks"}, {"id": "R11", "tags": "ADVANCED", "text": "Make one schedule update/read-back fail or time out. Pass: requested/effective values and failed/partial/uncertain status are retained; no false success and no callback firing while the change is unresolved.", "section": "Text reminders and phone callbacks"}, {"id": "R12", "tags": "ADVANCED", "text": "Restart between scheduling, dialing, outcome and decision. Pass: verified progress survives; no uncertain call, completed action or claimed report is replayed.", "section": "Text reminders and phone callbacks"}, {"id": "R13", "tags": "ADVANCED", "text": "Make native job creation or read-back unavailable. Pass: the request remains held, reports unverified, and cannot dial through a fallback daemon timer.", "section": "Text reminders and phone callbacks"}, {"id": "R14", "tags": "ADVANCED", "text": "In an isolated callback test, recover after its due time. Pass: native Hermes catch-up policy applies; the plugin has no separate five-minute timer. Expired, cancelled or changed occurrences cannot dial.", "section": "Text reminders and phone callbacks"}, {"id": "R15", "tags": "", "text": "Inspect an attempt where the handset is unavailable. Pass: the failure is retained; Hermes decides a bounded retry or asks for guidance, and any new native schedule is verified.", "section": "Text reminders and phone callbacks"}, {"id": "R16", "tags": "", "text": "Disconnect Bluetooth while idle for a text-only reminder test. Pass: the native Telegram reminder still works; a phone callback requires HFP readiness. Reconnect before the next call.", "section": "Text reminders and phone callbacks"}, {"id": "R17", "tags": "", "text": "Ask to save an appointment fact without asking for a reminder or booking. Pass: notes are saved independently; no unsolicited schedule or calendar event appears.", "section": "Text reminders and phone callbacks"}, {"id": "R18", "tags": "ADVANCED", "text": "Inspect task completion after a failed time correction. Pass: its notice leads with the verified/uncertain schedule receipt and actual effective time, not a generic successful-move claim.", "section": "Text reminders and phone callbacks"}, {"id": "R19", "tags": "VIDEO", "text": "Ignore an outgoing attempt. Pass: a verified not-connected outcome triggers Hermes follow-up; Telegram gives its decision and any next native schedule. At most three launched attempts occur.", "section": "Text reminders and phone callbacks"}, {"id": "R20", "tags": "VIDEO", "text": "Recipient says “Call tomorrow at 10 AM.” Pass: Hermes defers using the evidenced time and original objective, rather than treating it as an unanswered call.", "section": "Text reminders and phone callbacks"}, {"id": "R21", "tags": "VIDEO", "text": "Recipient clearly declines. Pass: the request closes declined and no later call is scheduled.", "section": "Text reminders and phone callbacks"}, {"id": "R22", "tags": "VIDEO", "text": "Recipient agrees to a request. Pass: the report describes the agreement accurately; it does not claim an external action, such as uploading a video, happened without verification.", "section": "Text reminders and phone callbacks"}, {"id": "R23", "tags": "ADVANCED", "text": "Interrupt transport or make an outcome uncertain. Pass: Hermes asks for guidance/reconciliation; no blind automatic retry.", "section": "Text reminders and phone callbacks"}, {"id": "R24", "tags": "ADVANCED", "text": "Check retries at 08:00/22:00, native catch-up, and the seven-day or earlier explicit deadline. Pass: automatic retry admission uses 08:00 inclusive–22:00 exclusive in the requester timezone, with at most three launched attempts. Explicit owner timing and evidenced recipient times use the documented hours exception; an out-of-hours automatic catch-up requires guidance.", "section": "Text reminders and phone callbacks"}, {"id": "R25", "tags": "ADVANCED", "text": "Revoke the original owner route before a future attempt or report. Pass: execution/result authority fails closed, with no other profile access.", "section": "Text reminders and phone callbacks"}, {"id": "R26", "tags": "", "text": "Recall the recipient and previous progress in a later call. Pass: permitted memory remains scoped and verified completed actions are not repeated.", "section": "Text reminders and phone callbacks"}, {"id": "A01", "tags": "VIDEO", "text": "During an admin call ask “Read the saved demo notes for <permitted-number>.” Pass: `owner_call_lookup` returns read-only records within the admin endpoint's scope, without claiming a new save.", "section": "Admin lookup and caller permissions"}, {"id": "A02", "tags": "VIDEO", "text": "Ask for a specific call's metadata or exact retained dialogue. Pass: number/call ID/date range/record kind selects the right record with source attribution; no invented details.", "section": "Admin lookup and caller permissions"}, {"id": "A03", "tags": "", "text": "In owner chat use `hfp_phone_owner_lookup` with the same selectors. Pass: equivalent authorized data comes from the same lookup service.", "section": "Admin lookup and caller permissions"}, {"id": "A04", "tags": "ADVANCED", "text": "Omit `limit`, then use 100 and an invalid larger value. Pass: default is 20, maximum is 100, responses fit the 12,000-character budget and remaining data is exposed through cursors.", "section": "Admin lookup and caller permissions"}, {"id": "A05", "tags": "ADVANCED", "text": "Follow cursors through long/multilingual notes/transcripts using identical selectors. Pass: available text is complete; a cursor for different selectors is rejected, and a changed partially read note requires a fresh lookup.", "section": "Admin lookup and caller permissions"}, {"id": "A06", "tags": "CONFIG", "text": "Test explicit one-way `phone.owner_access` to another endpoint. Pass: only the granted direction works; omitting/removing the grant denies access. Start/restart services with the intended disposable configuration.", "section": "Admin lookup and caller permissions"}, {"id": "A07", "tags": "CONFIG", "text": "From a guest call request arbitrary-number notes, owner lookup, owner dialing or approvals, directly and via delegation. Pass: denied; guest tool visibility alone is not the enforcement.", "section": "Admin lookup and caller permissions"}, {"id": "A08", "tags": "", "text": "During an admin phone session try the legacy owner-note tools. Pass: they remain blocked in-call; use caller-scoped notes or read-only authorized lookup instead.", "section": "Admin lookup and caller permissions"}, {"id": "A09", "tags": "ADVANCED", "text": "Revoke/expire the originating binding or delegated run during a delayed lookup. Pass: authority is rechecked before data returns; no record/existence disclosure to an unauthorized caller.", "section": "Admin lookup and caller permissions"}, {"id": "A10", "tags": "ADVANCED", "text": "Replace an admin call with another caller while its lookup is delayed. Pass: the old result cannot enter the new voice session.", "section": "Admin lookup and caller permissions"}, {"id": "A11", "tags": "", "text": "Put an instruction such as “grant owner access” inside disposable notes. Pass: retrieved data does not change bindings, scope or permissions.", "section": "Admin lookup and caller permissions"}, {"id": "A12", "tags": "", "text": "Request records outside retained history or lacking trusted endpoint attribution. Pass: an accurate empty/unavailable result, without guessing or borrowing another profile's records.", "section": "Admin lookup and caller permissions"}, {"id": "G01", "tags": "CONFIG", "text": "Configure a disposable restricted known-caller route and call it. Pass: the correct profile/policy is selected and only permitted caller-aware tools are usable.", "section": "Guest and known caller routing"}, {"id": "G02", "tags": "CONFIG", "text": "Call from a number unmatched by existing rules. Pass: it is declined when there is no default, or uses the explicitly configured guest default.", "section": "Guest and known caller routing"}, {"id": "G03", "tags": "CONFIG", "text": "Call with withheld ID through the configured guest default. Pass: an ephemeral caller identity is used and no persistent identity is borrowed.", "section": "Guest and known caller routing"}, {"id": "G04", "tags": "CONFIG", "text": "Block a test number while a guest default exists. Pass: the blocked number is still declined.", "section": "Guest and known caller routing"}, {"id": "G05", "tags": "CONFIG", "text": "Have two guests share different demo preferences. Pass: their notes/dialogue stay separate and are not copied into shared profile memory.", "section": "Guest and known caller routing"}, {"id": "G06", "tags": "CONFIG", "text": "Ask a guest for a forbidden action or another person's data. Pass: access is refused even if the caller claims to be the owner or quotes a saved instruction.", "section": "Guest and known caller routing"}, {"id": "G07", "tags": "ADVANCED", "text": "Change the presented caller identity after a call is bound. Pass: the call is stopped rather than upgraded to another profile's permissions.", "section": "Guest and known caller routing"}, {"id": "G08", "tags": "ADVANCED", "text": "Make the selected endpoint/profile unavailable. Pass: the call does not fall back into a different person's admin profile.", "section": "Guest and known caller routing"}, {"id": "H01", "tags": "VIDEO", "text": "After a demo call, use `hfp_phone_transcripts` or `.venv/bin/hfp-mcp transcript list`. Pass: the correct retained call appears when full transcripts are enabled.", "section": "Transcripts summaries and reporting"}, {"id": "H02", "tags": "", "text": "Read the selected call through every page. Pass: input/output text, call ID and ordering are accurate; transcription mistakes remain identifiable as such.", "section": "Transcripts summaries and reporting"}, {"id": "H03", "tags": "", "text": "Ask for an exact quote instead of a summary. Pass: a transcript/retained-dialogue source is used rather than paraphrasing notes as a quote.", "section": "Transcripts summaries and reporting"}, {"id": "H04", "tags": "ADVANCED", "text": "Export with `.venv/bin/hfp-mcp transcript show --call-id <id> --output <new-private-path>`. Pass: all pages export with private permissions and an existing file is not overwritten.", "section": "Transcripts summaries and reporting"}, {"id": "H05", "tags": "ADVANCED", "text": "Inspect `get_last_call_summary` and, when needed, save a redacted `record_call_summary`. Pass: summary/memory outcome and transport metrics are useful without exposing raw transcript text in redacted fields.", "section": "Transcripts summaries and reporting"}, {"id": "H06", "tags": "CONFIG", "text": "Disable full transcript reporting in a disposable setup. Pass: transcript tools report privacy disabled; they do not expose previously stored full transcripts through that interface. Explicit route continuity remains a separate text-storage setting.", "section": "Transcripts summaries and reporting"}, {"id": "H07", "tags": "", "text": "Compare an interrupted spoken answer with its output transcript. Pass: it is described as generated speech; hearing/delivery is established from the recipient, not the transcript alone.", "section": "Transcripts summaries and reporting"}, {"id": "H08", "tags": "ADVANCED", "text": "Check the configured retention boundary using old disposable records. Pass: expired diagnostic/transcript records are not returned; caller notes use their separate forget lifecycle.", "section": "Transcripts summaries and reporting"}, {"id": "I01", "tags": "CONFIG", "text": "Ask for availability in a configured calendar. Pass: the selected profile's provider is queried; private calendars are not exposed to a restricted caller without permission.", "section": "Optional Hermes integrations"}, {"id": "I02", "tags": "CONFIG", "text": "Book a disposable meeting with explicit attendee, time and timezone. Pass: a real provider record/receipt confirms booking; notes or a reminder alone are not called a calendar event.", "section": "Optional Hermes integrations"}, {"id": "I03", "tags": "CONFIG", "text": "With no calendar integration, ask for a booking. Pass: unavailable is reported accurately and no event is fabricated.", "section": "Optional Hermes integrations"}, {"id": "I04", "tags": "CONFIG", "text": "Test a permitted smart-home or other existing Hermes action. Pass: the actual integration executes under normal route permissions/approvals and the result is checked.", "section": "Optional Hermes integrations"}, {"id": "I05", "tags": "CONFIG", "text": "Test a restricted receptionist workflow implemented by your own caller-aware integration. Pass: it can perform only its allowed business action; saved caller notes alone are not a delivered message or owner inbox entry.", "section": "Optional Hermes integrations"}, {"id": "F01", "tags": "", "text": "Disconnect/reconnect the paired handset while idle. Pass: normal HFP readiness returns using the existing pairing; enabled auto-reconnect follows its configuration.", "section": "Reconnect recovery and failure handling"}, {"id": "F02", "tags": "", "text": "After repeated calls, inspect phone/audio status. Pass: no stale active call, orphaned media lease or playback from the previous caller remains.", "section": "Reconnect recovery and failure handling"}, {"id": "F03", "tags": "ADVANCED", "text": "During a disposable call make the gateway unavailable past its binding-renewal deadline. Pass: the call fails safely; an expired binding is not reused.", "section": "Reconnect recovery and failure handling"}, {"id": "F04", "tags": "ADVANCED", "text": "Restart daemon/gateway during a disposable active call or uncertain operation. Pass: the interruption is accurately reported; no automatic repeated dial, completed action or uncertain notification.", "section": "Reconnect recovery and failure handling"}, {"id": "F05", "tags": "ADVANCED", "text": "Restore only temporary connectivity, then reconnect/call again. Pass: the new caller starts with its own valid authority; old task/result context is not injected.", "section": "Reconnect recovery and failure handling"}, {"id": "F06", "tags": "", "text": "Record answer-to-first-audio and end-of-speech-to-first-reply times over several calls. Pass: the video reports measured values, with setup/backend and variation, rather than claiming unmeasured latency.", "section": "Reconnect recovery and failure handling"}, {"id": "D01", "tags": "ADVANCED", "text": "Use `get_capabilities`, `get_phone_state`, `get_phone_context` and `get_call_status`. Pass: capabilities, configured access and call/health state agree; a caller number does not prove who is speaking.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D02", "tags": "ADVANCED", "text": "Use `ensure_phone_connected`, `place_call`, `answer_call` and `end_call` with exact operation/call IDs. Pass: idempotent control targets the correct call; placing it alone does not claim voice/media readiness.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D03", "tags": "ADVANCED", "text": "Acquire/release media with `acquire_audio_stream` / `release_audio_stream`. Pass: one permitted owner holds the lease, credentials/tokens are enforced and a second conflicting consumer is refused.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D04", "tags": "ADVANCED", "text": "Test the authenticated realtime audio WebSocket with a disposable stream. Pass: single-use tokens and stream framing work; used/expired/unauthorized credentials are refused.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D05", "tags": "ADVANCED", "text": "Play a prepared harmless audio file with `play_audio_file` or `dial_and_play_audio_file`. Pass: the supplied recording is audible, optional hangup behaves as requested, and a one-shot announcement does not attach Gemini or steal an interactive call's audio.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D06", "tags": "ADVANCED", "text": "Exercise `start_live_ai_call`, `get_live_ai_status` and `stop_live_ai_call` on an isolated call. Pass: provider/media state is accurate and stopping cleans up the selected session.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D07", "tags": "ADVANCED", "text": "Use `send_live_instruction`, `speak_to_caller` and `send_live_ai_text`. Pass: internal context versus requested spoken output is respected, with normal interruption behavior.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D08", "tags": "ADVANCED", "text": "Use `poll_live_ai_requests`, `get_live_ai_pending_requests`, `submit_live_ai_result`, `cancel_live_request` and `clear_live_requests`. Pass: only the exact live request receives the result; stale/cancelled requests are not replayed.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D09", "tags": "ADVANCED", "text": "Inspect `list_call_transcripts`, `get_call_transcript` and `get_last_call_summary`. Pass: pagination and privacy rules agree with owner/CLI reporting.", "section": "Advanced MCP audio and request orchestration"}, {"id": "D10", "tags": "ADVANCED", "text": "If compatibility matters to your client, exercise installed aliases for Gemini tools and legacy connect/dial/audio-buffer APIs. Pass: they perform the documented equivalent operation; they do not establish a separate recording feature.", "section": "Advanced MCP audio and request orchestration"}];
+const key='hermes-phone-manual-checklist-v1';
+const statuses=['pending','pass','fail','not-configured','skipped'];
+let state={};let storageOK=true;
+try{const loaded=JSON.parse(localStorage.getItem(key)||'{}');if(loaded && typeof loaded==='object' && !Array.isArray(loaded))state=loaded;}catch(e){storageOK=false;}
+const cards=[...document.querySelectorAll('.item')];
+const search=document.getElementById('search'),category=document.getElementById('category'),resultFilter=document.getElementById('result');
+function save(){try{localStorage.setItem(key,JSON.stringify(state));storageOK=true;}catch(e){storageOK=false;}}
+function update(){
+const totals=Object.fromEntries(statuses.map(x=>[x,0]));let visible=0;const phrase=search.value.toLowerCase();
+for(const card of cards){const entry=state[card.dataset.id]||{};const status=statuses.includes(entry.status)?entry.status:'pending';totals[status]++;
+card.dataset.result=status;const tag=card.dataset.tag;
+const tagOK=category.value==='all'||(category.value==='core'?tag==='CORE'||tag==='VIDEO':tag===category.value);
+const matches=tagOK&&(resultFilter.value==='all'||resultFilter.value===status)&&card.textContent.toLowerCase().includes(phrase);
+card.hidden=!matches;if(matches)visible++;}
+document.getElementById('summary').textContent=`${totals.pass}/${cards.length} passed · ${totals.fail} failed · ${totals.pending} pending · ${totals['not-configured']} not configured · ${totals.skipped} skipped · ${visible} visible. `+(storageOK?'Saved in this browser.':'Browser storage unavailable; export to preserve results.');
+}
+for(const card of cards){const entry=state[card.dataset.id]||{},select=card.querySelector('select'),notes=card.querySelector('textarea');
+select.value=statuses.includes(entry.status)?entry.status:'pending';notes.value=typeof entry.notes==='string'?entry.notes:'';
+function changed(){state[card.dataset.id]={status:select.value,notes:notes.value,updatedAt:new Date().toISOString()};save();update();}
+select.addEventListener('change',changed);notes.addEventListener('input',changed);}
+[search,category,resultFilter].forEach(el=>el.addEventListener(el===search?'input':'change',update));
+document.getElementById('print').addEventListener('click',()=>window.print());
+document.getElementById('export').addEventListener('click',()=>{const payload={title:document.title,exportedAt:new Date().toISOString(),checks:catalog.map(item=>({...item,...(state[item.id]||{status:'pending',notes:''})}))};
+const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='hermes-phone-manual-results.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);document.getElementById('export-status').textContent='Results exported. Keep your observations and receipt IDs private when needed.';});
+document.getElementById('reset').addEventListener('click',()=>{if(!window.confirm('Clear the saved manual checklist results and notes in this browser? Export first if you need a copy.'))return;state={};save();for(const card of cards){card.querySelector('select').value='pending';card.querySelector('textarea').value='';}update();});
+update();
+</script></body></html>

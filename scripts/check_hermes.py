@@ -42,6 +42,8 @@ async def exercise():
         "model": {"default": "test/model", "provider": "openrouter"},
         "memory": {"memory_enabled": False, "user_profile_enabled": False},
         "plugins": {"enabled": ["hfp-phone"]},
+        "platforms": {"slack": {"enabled": True, "token": "synthetic-token",
+            "home_channel": {"platform": "slack", "chat_id": "compat-home", "thread_id": "42"}}},
     }
     (home / "config.yaml").write_text(yaml.safe_dump(config))
     route = {
@@ -76,6 +78,9 @@ async def exercise():
     manager._plugins["hfp-phone"] = LoadedPlugin(manifest=manifest, enabled=True)
     context = PluginContext(manifest, manager)
     hermes_bridge.register(context)
+    from hermes_cli import plugins as native_plugins
+    native_plugins._plugin_manager = manager
+    manager._discovered = True
     assert manager._hooks.get("pre_tool_call") and manager._hooks.get("pre_llm_call")
     assert manager._platform_handler_factories.get("api_server")
     bridge = hermes_bridge._BRIDGES[-1]
@@ -107,12 +112,141 @@ async def exercise():
         )
     )
     assert json.loads(response.text)["conversation_sessions"]
+    assert json.loads(response.text)["reminder_delivery_modes"] == ['gateway', 'call', 'both']
     try:
         await handler(make_mocked_request("GET", "/v1/hfp/capabilities"))
     except web.HTTPUnauthorized:
         pass
     else:
         raise AssertionError("Bridge capability endpoint accepted missing credentials")
+
+    # Use real native cron storage and firing fences in this disposable profile.
+    from hfp_mcp import reminders
+    from cron.jobs import get_job
+    import time
+    from datetime import datetime, timezone
+    from hfp_mcp.hermes_compat import gateway_destination
+    selected = gateway_destination()
+    assert selected['deliver'] == 'slack:compat-home:42', selected
+    # The monkeypatch below applies only to the legacy persisted-job branch.
+    original_destination = reminders.telegram_destination
+    reminders.telegram_destination = lambda: 'local'
+    try:
+        created = bridge.workflows.schedule({'request_id': 'compat-workflow', 'number': '+919876543210',
+            'purpose': 'Compatibility check; never place this call.',
+            'run_at': datetime.fromtimestamp(time.time()+3600, timezone.utc).isoformat()}, '')
+        assert created['ok'] and created['callback']['scheduler'] == 'hermes'
+        job = bridge.workflows.jobs.get(created['callback']['cron_job_id'])
+        assert job['no_agent'] and job['state'] == 'scheduled'
+        assert (home / 'scripts' / job['script']).is_file()
+        moved = bridge.workflows.reschedule({'callback_id': created['callback']['id'],
+            'request_id': 'compat-move', 'expected_revision': 0,
+            'run_at': datetime.fromtimestamp(time.time()+7200, timezone.utc).isoformat()})
+        assert moved['ok'] and moved['callback']['cron_job_id'] == job['id']
+        from cron.jobs import claim_job_for_fire
+        from cron.executions import create_execution, mark_execution_running, finish_execution
+        with bridge.workflows.jobs.scope():
+            assert claim_job_for_fire(job['id'], force=True)
+            execution = create_execution(job['id'], source='builtin', scheduled_instant=datetime.fromtimestamp(moved['callback']['run_at'], timezone.utc).isoformat())
+            assert mark_execution_running(execution['id'])
+        # Admission is persisted, but execute/dial is intentionally never invoked.
+        request_row, attempt, admitted = bridge.workflows.admit(created['callback']['id'], job['id'], execution['id'])
+        assert admitted and attempt['fire_owner']
+        grant = bridge.workflows.daemon_authority(request_row['id'], attempt['id'], execution['id'])
+        assert grant['authorized'] and grant['profile'] == 'default'
+        # Exercise the actual native catalog, deferred-call unwrapping, hooks,
+        # plugin registry and exact decision-run grant without a model or dial.
+        from tools.approval_context import set_current_session_key, reset_current_session_key
+        from model_tools import handle_function_call
+        request_row, attempt = bridge.workflows.store.update_attempt(request_row['id'], attempt['id'],
+            status='deciding', decision_deadline=time.time()+120, decision_run_id='compat-decision-run',
+            outcome={'connection_state': 'connected', 'uncertain': False, 'still_active': False,
+                'evidence': [{'id': 'input:1', 'kind': 'transcript', 'direction': 'input'}]})
+        target = 'hfp_phone_apply_followup_decision'
+        args = {'callback_id': request_row['id'], 'attempt_id': attempt['id'],
+            'request_id': 'compat-decision', 'expected_revision': request_row['revision'],
+            'action': 'close', 'disposition': 'completed', 'reason': 'Synthetic conversation evidence.',
+            'evidence_ids': ['input:1']}
+        identity = set_current_session_key('compat-decision-run')
+        try:
+            for name, payload in [('tool_search', {'queries': [target]}), ('tool_describe', {'names': [target]})]:
+                block, _ = native_plugins._dispatch_pre_tool_call_hooks(name, payload, session_id=attempt['decision_session'])
+                assert block is None, block
+                catalog = handle_function_call(name, payload, session_id=attempt['decision_session'], enabled_toolsets=['hfp_phone'])
+                assert target in catalog, catalog
+            for name, payload in [('terminal', {'command': 'true'}), ('tool_search', {'queries': ['terminal']}),
+                                  ('tool_call', {'calls': [{'name': 'terminal', 'arguments': {}}]})]:
+                block, _ = native_plugins._dispatch_pre_tool_call_hooks(name, payload, session_id=attempt['decision_session'])
+                assert block, (name, payload)
+            payload = {'calls': [{'name': target, 'arguments': args}]}
+            block, _ = native_plugins._dispatch_pre_tool_call_hooks('tool_call', payload, session_id=attempt['decision_session'])
+            assert block is None, block
+            result = json.loads(handle_function_call('tool_call', payload,
+                session_id=attempt['decision_session'], enabled_toolsets=['hfp_phone']))
+            assert result.get('ok'), result
+        finally:
+            reset_current_session_key(identity)
+        assert bridge.workflows.cancel(created['callback']['id'])['ok']
+        try:
+            bridge.workflows.daemon_authority(request_row['id'], attempt['id'], execution['id'])
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError('Cancelled workflow retained dialing authority')
+        with bridge.workflows.jobs.scope():
+            finish_execution(execution['id'], success=False, error='Synthetic admission only; no call was placed')
+        assert bridge.workflows.jobs.get(job['id'])['state'] == 'paused'
+    finally:
+        reminders.telegram_destination = original_destination
+
+    # Real native component storage, ordered firing fences and durable notification
+    # claims, without executing any script, sending a message, or dialing.
+    created = bridge.workflows.schedule({'request_id': 'compat-both', 'number': '+919876543210',
+        'purpose': 'Synthetic reminder; never deliver.',
+        'run_at': datetime.fromtimestamp(time.time()+3600, timezone.utc).isoformat()}, '',
+        delivery_plan={'mode': 'both', 'gateway': selected, 'notify_at_due': True})
+    row = created['callback']
+    assert bridge.workflows.jobs.get(row['cron_job_id'])['deliver'] == 'local'
+    assert bridge.workflows.jobs.get(row['notification_job_id'])['deliver'] == selected['deliver']
+    moved = bridge.workflows.reschedule({'callback_id': row['id'], 'request_id': 'compat-both-move',
+        'expected_revision': row['revision'],
+        'run_at': datetime.fromtimestamp(time.time()+7200, timezone.utc).isoformat()})['callback']
+    assert moved['run_at'] == moved['notification_run_at']
+    with bridge.workflows.jobs.scope():
+        assert claim_job_for_fire(row['notification_job_id'], force=True)
+        execution = create_execution(row['notification_job_id'], source='builtin',
+            scheduled_instant=datetime.fromtimestamp(moved['notification_run_at'], timezone.utc).isoformat())
+        assert mark_execution_running(execution['id'])
+    notice = bridge.workflows.notification(row['id'], row['notification_job_id'], execution['id'])
+    assert notice['report'] == 'Reminder: Synthetic reminder; never deliver.'
+    assert bridge.workflows.notification(row['id'], row['notification_job_id'], execution['id'])['report'] == ''
+    with bridge.workflows.jobs.scope():
+        finish_execution(execution['id'], success=True)
+    with bridge.workflows.jobs.scope():
+        assert claim_job_for_fire(row['cron_job_id'], force=True)
+        call_execution = create_execution(row['cron_job_id'], source='builtin',
+            scheduled_instant=datetime.fromtimestamp(moved['run_at'], timezone.utc).isoformat())
+        assert mark_execution_running(call_execution['id'])
+    _, attempt, _ = bridge.workflows.admit(row['id'], row['cron_job_id'], call_execution['id'])
+    bridge.workflows.store.update_attempt(row['id'], attempt['id'], status='decided', report='Synthetic outcome')
+    assert bridge.workflows.report(row['id'], attempt['id'], call_execution['id'])['delivery'] == 'separate_report_job'
+    with bridge.workflows.jobs.scope():
+        finish_execution(call_execution['id'], success=True)
+    current = bridge.workflows.store.get(row['id'])
+    bridge.workflows.recover_report(current, current['attempts'][0])
+    attempt = bridge.workflows.store.get(row['id'])['attempts'][0]
+    report_job = bridge.workflows.jobs.get(attempt['report_job_id'])
+    assert report_job['deliver'] == selected['deliver'] and report_job['state'] == 'scheduled'
+    with bridge.workflows.jobs.scope():
+        assert claim_job_for_fire(report_job['id'], force=True)
+        report_execution = create_execution(report_job['id'], source='builtin',
+            scheduled_instant=report_job['schedule']['run_at'])
+        assert mark_execution_running(report_execution['id'])
+    assert bridge.workflows.report(row['id'], attempt['id'], report_execution['id'])['report'] == 'Synthetic outcome'
+    assert bridge.workflows.report(row['id'], attempt['id'], report_execution['id'])['report'] == ''
+    with bridge.workflows.jobs.scope():
+        finish_execution(report_execution['id'], success=True)
+    assert bridge.workflows.cancel(row['id'])['ok']
 
     store = bridge.store
     store.bind(
@@ -167,9 +301,28 @@ async def exercise():
         assert db.get_session(root) is None and db.get_session(child) is None
     if hasattr(bridge, "tasks"):
         bridge.tasks.capacity.db.close()
+    # Real native reminder-store/firing-lock integration, with no scheduler or delivery.
+    import time
+    from tools.cronjob_tools import cronjob
+    from hfp_mcp.reminders import read_reminder, move_reminder
+    original_due = time.time() + 600
+    from datetime import datetime, timezone
+    due_text = datetime.fromtimestamp(original_due, timezone.utc).isoformat()
+    job = json.loads(cronjob(action='create', name='Synthetic callback verification',
+        schedule=due_text, prompt='Synthetic reminder\nScheduled time: ' + due_text, deliver='telegram'))
+    assert job.get('success'), job
+    job_id = job['job_id']
+    observed = read_reminder(job_id, original_due)
+    assert observed['matches'], observed
+    changed_due = original_due + 600
+    moved = move_reminder(job_id, changed_due)
+    assert moved['verified'] and moved['matches'], moved
+    assert move_reminder(job_id, changed_due)['matches']
+    assert json.loads(cronjob(action='pause', job_id=job_id))['success']
+    assert not move_reminder(job_id, changed_due + 600)['verified']
     store.close()
     print(
-        "PASS: native plugin registration, capability/auth gates, sessions, caller revocation, compaction lineage and deletion"
+        "PASS: native plugin/auth/session APIs, non-Telegram default resolution, linked reminder/callback creation/move/cancel, notification claims, separate outcome reporting and reminder read-back; no calls or messages sent"
     )
 
 

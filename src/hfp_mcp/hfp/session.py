@@ -9,7 +9,7 @@ import logging
 import socket
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, Optional
 
 from ..config import AT_TERMINAL_QUARANTINE_SECONDS, AT_TIMEOUT_SECONDS
@@ -437,6 +437,8 @@ class CallInfo:
     number: str | None = None
     name: str | None = None
     calls: tuple[CLCCEntry, ...] = ()
+    termination_reason: str | None = None
+    was_active: bool = False
 
 
 class ATEventDispatcher:
@@ -468,7 +470,7 @@ class ATEventDispatcher:
         )
         with state._lock:
             present = state.call_state != CallState.IDLE
-        self._call_info = CallInfo(generation=1 if present else 0)
+        self._call_info = CallInfo(generation=1 if present else 0, was_active=state.call_state == CallState.ACTIVE)
 
     @property
     def call_info(self) -> CallInfo:
@@ -491,7 +493,7 @@ class ATEventDispatcher:
                 self._broker.abort()
                 with self._state._lock:
                     had_call = self._state.call_state != CallState.IDLE
-                ended_info = self._call_info
+                ended_info = replace(self._call_info, termination_reason="transport_disconnected")
                 try:
                     disconnected = self._state.set_disconnected(self._generation)
                 except TypeError:
@@ -534,7 +536,7 @@ class ATEventDispatcher:
                 self.apply_clcc_entries((entry,))
         elif prefix in ("NO CARRIER", "BUSY", "NO ANSWER"):
             log.info("Call ended by remote (%s)", prefix)
-            self._end_call()
+            self._end_call(prefix.lower().replace(" ", "_"))
         elif prefix == "+BCS":
             # Codec negotiation is deliberately not advertised.  Accepting a
             # codec here would make the SDP/BRSF capability contract false.
@@ -624,6 +626,7 @@ class ATEventDispatcher:
             number=primary.number or self._call_info.number,
             name=primary.name or self._call_info.name,
             calls=calls,
+            was_active=self._call_info.was_active,
         )
         set_identity = getattr(self._state, "set_remote_identity", None)
         if callable(set_identity) and primary.number:
@@ -644,6 +647,7 @@ class ATEventDispatcher:
             number=caller.number,
             name=caller.name,
             calls=self._call_info.calls,
+            was_active=self._call_info.was_active,
         )
         set_identity = getattr(self._state, "set_remote_identity", None)
         if callable(set_identity):
@@ -680,13 +684,14 @@ class ATEventDispatcher:
             number=self._call_info.number,
             name=self._call_info.name,
             calls=() if was_idle else self._call_info.calls,
+            was_active=state == CallState.ACTIVE or (not was_idle and self._call_info.was_active),
         )
         self._notify_call_info()
 
-    def _end_call(self) -> None:
+    def _end_call(self, reason="disconnected") -> None:
         with self._state._lock:
             had_call = self._state.call_state != CallState.IDLE
-        ended_info = self._call_info
+        ended_info = replace(self._call_info, termination_reason=reason)
         self._state.set_call_state(CallState.IDLE)
         # ``audio_active`` is transport readiness, never inferred from CIND.
         self._state.set_audio_active(False)

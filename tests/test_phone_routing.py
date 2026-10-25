@@ -35,6 +35,23 @@ def test_optional_routes_and_explicit_guest():
     assert config.resolve("garbage")[0].policy == "guest"
 
 
+@pytest.mark.parametrize('mode', ['gateway', 'call', 'both'])
+def test_reminder_delivery_configuration(mode):
+    data = routing_data()
+    assert RoutingConfig.parse(data).reminder_delivery == 'gateway'
+    data['reminders'] = {'default_delivery': mode}
+    assert RoutingConfig.parse(data).reminder_delivery == mode
+
+
+@pytest.mark.parametrize('value', [None, [], 'call', {'default_delivery': 'sms'},
+                                    {'default_delivery': []}, {'gateway_platform': 'telegram'}])
+def test_invalid_reminder_configuration(value):
+    data = routing_data()
+    data['reminders'] = value
+    with pytest.raises(ValueError, match='reminders'):
+        RoutingConfig.parse(data)
+
+
 @pytest.mark.parametrize(
     "modify",
     [

@@ -30,18 +30,33 @@ def plugin(tmp_path, monkeypatch):
 
     monkeypatch.setattr(phone_cli, 'control', control)
     monkeypatch.setattr(reminders, 'telegram_destination', lambda: 'telegram')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: {
+        'platform': 'telegram', 'chat_id': 'owner', 'thread_id': None, 'deliver': 'telegram:owner'})
+    monkeypatch.setattr(reminders, 'read_reminder', lambda job_id, due: {'verified': True, 'matches': True, 'run_at': due})
+    original_control = control
+    def verified_control(path, body=None):
+        result = original_control(path, body)
+        if path == '/v1/phone/callbacks': result['callback']['reminder_job_id'] = None
+        if path.endswith('/reminder-claim'): result['acquired'] = True
+        if body is None and path == '/v1/phone/callbacks/cb-test':
+            result['callback']['run_at'] = posts[0][1]['run_at']
+        return result
+    monkeypatch.setattr(phone_cli, 'control', verified_control)
     monkeypatch.setitem(sys.modules, 'tools.cronjob_tools', SimpleNamespace(cronjob=cronjob))
     ctx = SimpleNamespace(profile_name='default', register_platform_handler=lambda *a: None,
                           register_hook=lambda *a: None,
                           register_tool=lambda **kw: registered.update({kw['name']: kw}))
     hermes_bridge.register(ctx)
     bridge = hermes_bridge._BRIDGES[-1]
+    from tests.test_phone_workflows import FakeJobs
+    bridge.workflows.jobs = FakeJobs(jobs)
     bridge.store.bind(session_id='hfp-admin', call_id='call', profile='default',
                       number='+919876543210', policy={'admin': True}, ttl=60,
                       timezone='Asia/Kolkata')
     bridge.store.bind(session_id='hfp-guest', call_id='guest', profile='default',
                       number='+919876543211', policy={'admin': False, 'tools': []}, ttl=60)
     yield registered, posts, jobs, bridge
+    bridge.workflows.store.close()
     bridge.store.close()
 
 
@@ -54,27 +69,26 @@ def test_phone_reminder_is_native_and_independent_of_bluetooth(plugin):
     assert result['ok'] and result['reminder']['error'] is None
     assert not plugin[1]
     job = plugin[2][0]
-    assert job['deliver'] == 'telegram'
+    assert job['deliver'] == 'telegram:owner'
     assert datetime.fromisoformat(job['schedule']).utcoffset().total_seconds() == 0
     assert 'final response' in job['prompt'] and 'Do not use tools' in job['prompt']
 
 
-def test_callback_resolves_bound_number_shares_exact_due_and_links_card(plugin):
+def test_callback_resolves_bound_number_and_has_one_native_executor(plugin):
     result = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
-    assert result['status'] == 'scheduled' and result['warning']
-    posted = plugin[1][0][1]
-    assert posted['number'] == '+919876543210'
-    assert datetime.fromisoformat(plugin[2][0]['schedule']).timestamp() == pytest.approx(posted['run_at'], abs=0.000001, rel=0)
-    assert plugin[1][1] == ('/v1/phone/callbacks/cb-test/reminder', {'job_id': 'job-1'})
+    assert result['status'] == 'scheduled' and result['verification']['verified']
+    assert result['callback']['number'] == '+919876543210'
+    assert result['callback']['cron_job_id'] == result['callback']['reminder_job_id']
+    assert not plugin[1] and len(plugin[2]) == 1 and plugin[2][0]['no_agent']
     assert invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2}, sid='owner-chat').get('error')
 
 
-def test_partial_failure_keeps_saved_callback_and_no_false_card_success(plugin, monkeypatch):
-    monkeypatch.setattr(reminders, 'telegram_destination', lambda: (_ for _ in ()).throw(ValueError('No Telegram home')))
+def test_missing_gateway_refuses_request_without_claiming_schedule_success(plugin, monkeypatch):
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: (_ for _ in ()).throw(ValueError('No gateway home')))
     result = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
-    assert result['ok'] and result['status'] == 'partial'
-    assert not result['reminder']['scheduled']
-    assert len(plugin[1]) == 1 and not plugin[2]
+    assert not result['ok'] and result['status'] == 'unverified'
+    assert not plugin[3].workflows.store.rows()
+    assert not plugin[1] and not plugin[2]
     result = invoke(plugin, 'hfp_phone_schedule_reminder', {'purpose': 'Meeting', 'delay_minutes': 2})
     assert result['ok'] is False
 
@@ -86,10 +100,11 @@ def test_restricted_and_expired_phone_sessions_cannot_schedule_or_cancel(plugin)
     assert not plugin[1] and not plugin[2]
 
 
-def test_cancel_pauses_linked_native_reminder(plugin):
-    result = invoke(plugin, 'hfp_phone_cancel_callback', {'callback_id': 'cb-test'})
-    assert result['ok'] and result['reminder_cancelled']
-    assert plugin[2] == [{'action': 'pause', 'job_id': 'job-1'}]
+def test_cancel_pauses_native_call_without_hangup(plugin):
+    created = invoke(plugin, 'hfp_phone_schedule_call', {'purpose': 'Meeting', 'delay_minutes': 2})
+    result = invoke(plugin, 'hfp_phone_cancel_callback', {'callback_id': created['callback']['id']})
+    assert result['ok'] and not result['active_call_ended']
+    assert plugin[3].workflows.jobs.get(created['callback']['cron_job_id'])['state'] == 'paused'
 
 
 @pytest.mark.parametrize('continued', [True, False])
@@ -137,3 +152,57 @@ def test_timezone_offset_and_relative_delay(monkeypatch):
     due = reminders.due_time({'run_at': '2026-09-26T10:20:00+05:30'})
     assert due == datetime.fromisoformat('2026-09-26T04:50:00+00:00').timestamp()
     assert reminders.due_time({'delay_minutes': 10}) == 1790360600
+
+
+@pytest.mark.parametrize('mode,count', [('gateway', 1), ('call', 1), ('both', 2)])
+def test_phone_reminder_defaults_select_components(plugin, monkeypatch, mode, count):
+    from dataclasses import replace
+    bridge = plugin[3]
+    bridge.config = replace(bridge.config, reminder_delivery=mode)
+    # The handlers share the configuration loaded at registration.
+    data = routing_data()
+    data['reminders'] = {'default_delivery': mode}
+    # RoutingConfig is also used to revalidate the live authority.
+    monkeypatch.setattr(RoutingConfig, 'load', classmethod(lambda cls: RoutingConfig.parse(data)))
+    bridge.workflows.bridge.config = bridge.config
+    result = invoke(plugin, 'hfp_phone_schedule_reminder', {'purpose': 'Cut your hair', 'delay_minutes': 3})
+    assert result['ok'] and result['delivery'] == mode and len(plugin[2]) == count
+    if mode != 'gateway':
+        assert result['callback']['number'] == '+919876543210'
+        assert plugin[2][0]['deliver'] == 'local'
+    if mode == 'both':
+        assert plugin[2][0]['schedule'] == plugin[2][1]['schedule']
+        assert result['callback']['notification_job_id']
+
+
+def test_explicit_call_only_works_without_gateway_and_is_idempotent(plugin, monkeypatch):
+    def unavailable():
+        raise AssertionError('Call-only scheduling must not resolve a gateway')
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', unavailable)
+    args = {'purpose': 'Cut your hair', 'delay_minutes': 3, 'delivery': 'call', 'request_id': 'haircut'}
+    first = invoke(plugin, 'hfp_phone_schedule_reminder', args)
+    again = invoke(plugin, 'hfp_phone_schedule_reminder', args)
+    assert first['ok'] and first == again
+    assert first['destination'] is None and plugin[2][0]['deliver'] == 'local'
+    assert len(plugin[2]) == 1
+    changed = invoke(plugin, 'hfp_phone_schedule_reminder', {**args, 'delivery': 'both'})
+    assert not changed['ok'] and len(plugin[2]) == 1
+
+
+def test_explicit_gateway_overrides_call_default_and_freezes_native_target(plugin, monkeypatch):
+    from dataclasses import replace
+    plugin[3].config = replace(plugin[3].config, reminder_delivery='call')
+    target = {'platform': 'slack', 'chat_id': 'owner', 'thread_id': 'thread', 'deliver': 'slack:owner:thread'}
+    monkeypatch.setattr('hfp_mcp.hermes_compat.gateway_destination', lambda: target)
+    result = invoke(plugin, 'hfp_phone_schedule_reminder', {
+        'purpose': 'Meeting', 'delay_minutes': 3, 'delivery': 'gateway'})
+    assert result['ok'] and result['destination'] == target
+    assert plugin[2][0]['deliver'] == target['deliver']
+    assert not plugin[3].workflows.store.rows()
+
+
+def test_chat_reminders_keep_gateway_default(plugin):
+    from dataclasses import replace
+    plugin[3].config = replace(plugin[3].config, reminder_delivery='both')
+    result = invoke(plugin, 'hfp_phone_schedule_reminder', {'purpose': 'Meeting', 'delay_minutes': 3}, 'owner-chat')
+    assert result['ok'] and result['delivery'] == 'gateway'

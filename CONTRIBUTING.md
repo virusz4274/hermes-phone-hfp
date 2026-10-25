@@ -32,7 +32,7 @@ the native dependencies above. Tests use fake Bluetooth objects and need no phon
 
 Run `bash -n setup/install.sh` after installer edits. Test installer changes using
 temporary directories and fake commands; do not run the real installer on CI.
-See [release validation](docs/release.md) for artifact and Hermes integration checks.
+See [validation guidance](docs/validation.md) for automated checks and Hermes integration guidance.
 
 ## Pull requests
 

@@ -76,7 +76,7 @@ def configure_phone(home: Path, example: Path, *, phone_config=None, service_env
             + "  numbers: {}\n  # Add your real number here using this structure:\n  # numbers:\n"
         )
         template += "".join(
-            "  # " + line[2:] if line.strip() else line
+            line if not line.strip() or line.lstrip().startswith("#") else "  # " + line[2:]
             for line in number_lines.splitlines(keepends=True)
         )
         template += "  # No default:" + after

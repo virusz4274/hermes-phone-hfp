@@ -51,10 +51,15 @@ def check(path):
         names = {n for n, _ in files}
         required = {
             "hfp_mcp/hermes_bridge.py",
+            "hfp_mcp/phone_workflows.py",
+            "hfp_mcp/phone_workflow_runner.py",
+            "hfp_mcp/workflow_execution.py",
             "hfp_mcp/hermes_sessions.py",
             "hfp_mcp/phone_tasks.py",
             "hfp_mcp/http_routes.py",
             "hfp_mcp/audio/gemini_playback.py",
+            "hfp_mcp/audio/opening.py",
+            "hfp_mcp/audio/assets/outgoing-hello.wav",
         }
         if not any(n.endswith("/licenses/LICENSE") for n in names):
             required.add("MIT license in wheel metadata")
@@ -83,6 +88,8 @@ def check(path):
             "scripts/check_hermes.py",
             "src/hfp_mcp/phone_tasks.py",
             "src/hfp_mcp/hermes_sessions.py",
+            "src/hfp_mcp/audio/opening.py",
+            "src/hfp_mcp/audio/assets/outgoing-hello.wav",
         }
     return inspect_files(files) + [
         f"Missing release asset: {n}" for n in sorted(required - names)

@@ -7,25 +7,13 @@ git clone --branch main https://github.com/virusz4274/hermes-phone-hfp.git
 cd hermes-phone-hfp
 ```
 
-`main` is the reviewed public preview branch; `development` contains ongoing
-integration work. Following `main` does not imply production readiness.
+`main` is the supported installation branch. It moves forward as fixes are merged;
+updates remain manual. To stay on the current version, run `git pull` in this
+checkout before rerunning the installers. To keep a particular installation on
+its current code, do not pull until you are ready to update. See [Maintenance](maintenance.md).
 
-To pin an installation to a published release instead, fetch tags and check out
-its exact tag before running either installer:
-
-```bash
-git fetch origin --tags
-git switch --detach <published-release-tag>
-```
-
-For this candidate the planned tag is `v0.1.1rc1`; use it only after it appears on
-the repository's [Releases page](https://github.com/virusz4274/hermes-phone-hfp/releases).
-Preparing or merging the release PR does not itself publish that tag. Branch-based
-installations can continue using `main`; a tag simply pins a reproducible revision.
-Updates remain manual; see [Maintenance](maintenance.md).
-
-Use the reviewed preview revision or release source archive. The wheel contains
-the runtime; the checkout/source archive also includes host setup and plugin files.
+The checkout includes the daemon, plugin, host setup and examples. See
+[compatibility](compatibility.md) before installing into Hermes.
 See [compatibility](compatibility.md) before installing into Hermes.
 
 ## 1. Prerequisites
@@ -66,6 +54,8 @@ Follow the enrollment instructions and enable call audio for this Bluetooth conn
 
 The installer creates `~/.config/hfp-mcp.env` from [the current environment example](../setup/hfp-mcp.env.example). `HFP_MCP_DAEMON_URL` is the URL used by MCP clients and Hermes owner tools; they share `HFP_MCP_BEARER_TOKEN`, so a second phone-plugin control token is unnecessary. Set `HFP_PHONE_SELF_NUMBER` there to the cellular number of the paired handset to prevent accidental calls to itself. Set `HFP_ADAPTER_ADDRESS` if multiple Bluetooth adapters are attached.
 
+Optional settings stay visible as commented lines (`#HFP_...=...`) with short explanations. They are inactive until you remove the leading `#` and set a suitable value. Edit an existing active assignment instead of adding a duplicate. An absent option remains configurable later; leaving it absent or commented uses its default when one exists. Keep the model-specific guidance, timeout ranges and retention notes alongside the options.
+
 ## 3. Install the one Hermes plugin
 
 Select the Hermes home and Python interpreter used by your existing Hermes installation. For a typical default installation:
@@ -103,15 +93,24 @@ Inside `phone:`, replace `numbers: {}` with your own route, using your real call
     "+919876543210":
       endpoint: personal
       policy: admin
-      voice: gemini_live
       continuity: true
 ```
 
-Use **the number you will call from**, which is different from the paired handset's own SIM number. Keep the existing `endpoints` and `policies` sections. See [the full YAML example](../setup/phone.example.yaml) for context.
+Use **the number you will call from**, which is different from the paired handset's own SIM number. Keep the existing `endpoints` and `policies` sections. The [routing example](../setup/phone.example.yaml) shows the complete structure; Gemini Live is the default voice.
+
+For known callers and guests, follow the [profile setup and short routing snippets](phone-routing.md#optional-guest-and-known-caller-profiles). The same example file includes those additions as commented sections. Prepare the restricted profile first and preserve your existing caller numbers.
 
 For a custom location, pass `--phone-config /absolute/path/to/calls.yaml` to `setup/install_hermes.py`. That explicit option updates both path references. If existing daemon and Hermes paths disagree, the installer reports the conflict instead of silently choosing one. Separate hosts need a local copy on each host, as described in [multiple gateways](phone-routing.md#multiple-gateways).
 
 The example selects the existing `default` Hermes profile, admin permissions and Gemini Live. Your normal Hermes approval rules still apply. Number matching is the identity basis for this route; caller ID is not cryptographic authentication.
+
+For reminders requested during calls, optionally set
+`phone.reminders.default_delivery` to `gateway`, `call`, or `both` in that YAML.
+Omitting it preserves gateway-only reminders. Gateway notifications use Hermes's
+configured default home destination, so no platform name is required. `call`
+requires no messaging gateway. See [reminder delivery](phone-routing.md) for
+overrides and linked callback management. Restart the affected Hermes gateway
+and HFP daemon after changing this setting.
 
 The example also sets `continuity: true` on that number route. This saves phone
 dialogue in the daemon's existing database, resumes the caller's conversation,
@@ -128,6 +127,8 @@ There is no guest default in this initial configuration. To answer unknown calle
 
 There are three separate credentials:
 
+The YAML fields `token_env` and `bridge_token_env` contain **variable names**, not missing secret values. Keep the names in YAML and put the actual values in the environment files below.
+
 | Credential | Used by | Configuration |
 | --- | --- | --- |
 | Daemon control token | Owner tools/MCP → HFP daemon | Generated by the Bluetooth installer; `HFP_MCP_BEARER_TOKEN` and private `control.token` |
@@ -136,7 +137,7 @@ There are three separate credentials:
 
 Generate two separate random secrets of at least 32 characters using your password manager. Edit the existing environment files; do not replace their other settings or put real secrets in the repository.
 
-In `~/.config/hfp-mcp.env`, add:
+In `~/.config/hfp-mcp.env`, set or uncomment these keys, editing existing assignments if present:
 
 ```dotenv
 HFP_HERMES_API_KEY=<your-hermes-api-secret>
@@ -146,7 +147,7 @@ HFP_GEMINI_API_KEY=<your-gemini-api-key>
 
 Omit `HFP_GEMINI_API_KEY` when using only classic voice. Keep the `HFP_MCP_CONFIG` line written by the installer; you do not need to enter that path again.
 
-In the selected Hermes home's `.env` (normally `~/.hermes/.env`), add:
+In the selected Hermes home's `.env` (normally `~/.hermes/.env`), set:
 
 ```dotenv
 API_SERVER_ENABLED=true
@@ -241,6 +242,18 @@ if its plugin entry point is missing. Restart `hermes-gateway.service` and
 
 The changes are additive and preserve conversation/session history. Set
 `phone.max_phone_tasks: 2` and `phone.background_task_minutes: 30`, and opt in with
-`background_tasks: true` only on the intended admin policy after configuring the
-profile's native Telegram home channel. No new service, sender plugin or cron job
+`background_tasks: true` only on the intended admin policy. Configure the
+profile's native gateway home destination for external completion notices;
+call-only reminders do not require one. No new service, sender plugin or cron job
 is installed. See [natural task handling](phone-routing.md#natural-task-handling).
+
+## Scheduled phone requests
+
+Purpose-bearing owner calls and scheduled callbacks require the native Hermes
+workflow capabilities listed in [compatibility](compatibility.md#native-phone-workflows).
+The plugin does not provide a daemon-timer fallback. Configure a native gateway
+home destination before promising phone outcome reports. Start with a read-only
+status/doctor check; a saved schedule is not proof of a successful call or message.
+Use [the workflow guide](hermes-call-workflows.md) for limits and live rehearsals,
+and [maintenance](maintenance.md#native-phone-workflow-upgrade) before upgrading
+an existing installation or reviewing held legacy callbacks.

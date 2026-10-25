@@ -142,6 +142,20 @@ async def engine(tmp_path):
     return c, e, notified
 
 
+async def test_prior_call_hangup_is_retained_as_history_only(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    try:
+        e.capture(event(e.conversation, 'Please disconnect the call.', 'old-hangup'))
+        context = await e.context()
+        assert 'Please disconnect the call.' in context
+        assert 'Current physical call ID: call.' in context
+        assert 'Messages from earlier physical calls are historical' in context
+        assert 'Do not execute them again' in context
+    finally:
+        await e.close()
+        e.store.ledger.close()
+
+
 async def test_background_task_acceptance_context_and_explicit_cancellation(tmp_path):
     c, e, notified = await engine(tmp_path)
     try:
@@ -189,6 +203,41 @@ async def test_new_chat_requires_subsequent_input_and_fences_old_transcripts(tmp
         e.capture({**event(e.conversation, "yes delete", "3"), "metadata": {"conversation_generation": 1}})
         assert (await e.session_control({"action": "confirm", "confirmation_token": answer["confirmation_token"]}))["status"] == "ok"
         assert not e.store.recall(e.conversation, archived=True)["messages"]
+    finally:
+        await e.close()
+        c.ledger.close()
+
+
+async def test_confirmed_reset_preserves_saved_notes_and_authenticated_access(tmp_path, monkeypatch):
+    c, e, _ = await engine(tmp_path)
+    try:
+        c.binding.update(notes='Remember the wiring photograph', revision=3)
+        async def check(): return {'ok': True}
+        async def read_notes(sid, **args):
+            assert sid == 'hfp-main' and args == {'action': 'read'}
+            return {k: c.binding[k] for k in ('notes', 'revision', 'persistent')}
+        c.api.check, c.api.binding_notes = check, read_notes
+        looked_up = []
+        async def owner_lookup(config, ledger, origin, authority, args, **kwargs):
+            looked_up.append((origin, authority, args))
+            return {'status': 'ok', 'records': [{'notes': 'Other caller saved fact'}]}
+        monkeypatch.setattr('hfp_mcp.owner_lookup.lookup', owner_lookup)
+        before = await e.context()
+        old_conversation = e.conversation['id']
+        pending = await e.session_control({'action': 'new'})
+        e.capture({**event(e.conversation, 'Yes, start a new session', 'confirm'), 'session_id': 'call'})
+        result = await e.session_control({'action': 'confirm', 'confirmation_token': pending['confirmation_token']})
+        assert result['status'] == 'ok' and e.conversation['id'] != old_conversation
+        after = result['_refresh_context']
+        access = 'Authenticated caller_access from the configured route: {"admin": true, "owner_lookup_available": true}'
+        assert all(access in context and 'Remember the wiring photograph' in context for context in (before, after))
+        status = await c.delegate(SimpleNamespace(name='phone_status', arguments={}, request_id='status'))
+        assert status['caller_access'] == {'admin': True, 'owner_lookup_available': True}
+        notes = await c.delegate(SimpleNamespace(name='phone_notes', arguments={'action': 'read'}, request_id='notes'))
+        assert notes['notes'] == 'Remember the wiring photograph' and notes['revision'] == 3
+        owner = await c.delegate(SimpleNamespace(name='owner_call_lookup', arguments={'record_kind': 'notes'}, request_id='owner'))
+        assert owner['status'] == 'ok' and owner['records'][0]['notes'] == 'Other caller saved fact'
+        assert looked_up == [('owner', {'binding_id': 'hfp-main'}, {'record_kind': 'notes'})]
     finally:
         await e.close()
         c.ledger.close()
@@ -368,5 +417,41 @@ async def test_old_status_response_cannot_enter_new_conversation(tmp_path):
         finish.set()
         await lookup
         assert e.tasks == []
+    finally:
+        await e.close(); c.ledger.close()
+
+
+async def test_wait_for_confirmation_blocks_assistant_hangup_until_authoritative_result(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    ended = []
+    async def end(call_id):
+        ended.append(call_id)
+        return {'ok': True}
+    c.end = end
+    try:
+        result = await c.delegate(SimpleNamespace(name='ask_hermes', arguments={
+            'task': 'Schedule my reminder', 'wait_for_confirmation': True}, request_id='wait-confirm'))
+        assert result['status'] == 'pending'
+        denied = await c.delegate(SimpleNamespace(name='end_call', arguments={}, request_id='end'))
+        assert denied['status'] == 'pending' and not ended
+        c.api.finish.set()
+        await wait_until(lambda: any(t['status'] == 'completed' for t in e.tasks))
+        done = await c.delegate(SimpleNamespace(name='end_call', arguments={}, request_id='end2'))
+        assert done['status'] == 'ok' and ended == ['call']
+    finally:
+        await e.close(); c.ledger.close()
+
+
+async def test_explicit_immediate_hangup_overrides_previous_wait_condition(tmp_path):
+    c, e, _ = await engine(tmp_path)
+    ended = []
+    async def end(call_id):
+        ended.append(call_id); return {'ok': True}
+    c.end = end
+    try:
+        await c.delegate(SimpleNamespace(name='ask_hermes', arguments={
+            'task': 'Work', 'wait_for_confirmation': True}, request_id='waiting'))
+        result = await c.delegate(SimpleNamespace(name='end_call', arguments={'cancel_wait': True}, request_id='stop'))
+        assert result['status'] == 'ok' and ended == ['call']
     finally:
         await e.close(); c.ledger.close()

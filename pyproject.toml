@@ -68,5 +68,6 @@ core-metadata-version = "2.4"
 packages = ["src/hfp_mcp"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]

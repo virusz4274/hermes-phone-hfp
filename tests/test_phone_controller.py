@@ -225,6 +225,26 @@ async def test_requested_hangup_does_not_report_voice_failure():
         await controller.close()
 
 
+async def test_controller_rejects_startup_hangup_even_with_cancel_wait():
+    from hfp_mcp.gemini_live import GeminiLiveManager
+    state = {'call': {'id': 'call-1', 'state': 'active'}}
+    ended = []
+    async def end(call_id): ended.append(call_id)
+    async def ok(*_): return {'ok': True}
+    controller = PhoneController(RoutingConfig.parse(routing_data()), snapshot=lambda: state,
+        answer=None, end=end, make_voice=None)
+    controller.call_id = 'call-1'
+    controller.binding, controller.api = {'session_id': 'binding'}, API(None)
+    manager = GeminiLiveManager(ensure_stream=ok, clear_playback=ok, hangup=ok)
+    controller.voice = SimpleNamespace(manager=manager)
+    request = SimpleNamespace(name='end_call', arguments={'cancel_wait': True})
+    assert (await controller.delegate(request))['status'] == 'denied'
+    assert not ended
+    manager._caller_spoke = True
+    assert (await controller.delegate(request))['status'] == 'ok'
+    assert ended == ['call-1']
+
+
 class API:
     def __init__(self, endpoint):
         self.actions = []

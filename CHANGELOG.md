@@ -2,7 +2,39 @@
 
 ## Unreleased
 
+- Clarify Gemini's existing hangup instruction: only a current-caller request or
+  goodbye ends the conversation; completing a task does not. No additional model
+  checks, tool arguments, or confirmation steps are introduced.
+
+- Reconcile caller notes through the existing after-call merge using a generic
+  instruction. Support targeted revisions with brief history and retained source
+  dates, preserve unrelated text, and prevent delayed saves from revising newer
+  information without adding agent sessions or scheduled maintenance.
+
+- Fix outgoing purpose delivery after the recipient's hello, including retained
+  history and reconnects. Separate incoming and outgoing opening instructions.
+- Save configurable missed-call retry delays per request, use deterministic
+  decisions for busy/unanswered and reminder calls, and add scoped conversational
+  callbacks that preserve the same objective and automatic retry budget.
+- Keep normal cron wrappers while rendering concise reminder bodies and verified
+  scheduling confirmations. Suppress routine attempt reports; retain structured
+  receipts and errors in diagnostics. Repair restricted evaluator tool discovery.
+
+- Configure phone reminder delivery as gateway, call, or both. Use Hermes's native
+  default gateway destination, support call-only operation without Telegram, and
+  manage linked reminder/callback schedules together with durable recovery.
+
+- Native Hermes scheduling and bounded outcome-driven phone follow-up replace the daemon callback timer and companion call-instruction reminder.
+- Durable profile-scoped requests, attempt evidence, restricted Hermes decisions, cancellation and restart safeguards distinguish connection from objective completion.
+- Reconcile planning, capability claims, data retention and coordinated upgrade
+  documentation with native scheduling. Full workflow live acceptance remains
+  pending; dated evidence is linked from [validation guidance](docs/validation.md).
+
 ## 0.1.1rc1 — public preview
+
+The entries below describe the earlier preview preparation. The Unreleased
+native-workflow changes supersede its daemon timer and companion-reminder design;
+see [current lifecycle](docs/hermes-call-workflows.md).
 
 - Carry the owner's purpose and relevant context into outgoing calls. Allow calls
   to unconfigured numbers with restricted conversation and per-number memory,
