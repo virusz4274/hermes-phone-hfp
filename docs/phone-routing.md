@@ -181,6 +181,14 @@ The result in either direction is:
 | Unmatched number with guest `phone.default` | Guest profile and policy | Guest profile and policy |
 | Unmatched number without `phone.default` | Declined | Notes-only outgoing fallback, if its endpoint can be selected |
 
+This table describes route selection. Purpose-bearing `hfp_phone_start_call` and
+`hfp_phone_schedule_call` requests also require the recipient's resolved profile
+to match the originating Hermes gateway's profile. A personal-profile workflow
+cannot call a recipient routed to a separate guest profile; it is rejected before
+native job creation or dialing. This also applies when a guest default selects
+another profile. `phone.owner_access` grants lookup access only, not cross-profile
+call authority. Raw, purpose-free call control does not use this workflow check.
+
 The owner supplies the outgoing objective, but the recipient's route determines
 permissions. `outbound_endpoint` only selects the last-resort notes-only route;
 it never overrides a matching number or guest default. The `known` policy above
@@ -262,8 +270,11 @@ for Gemini conversation and its own persistent notes. With multiple endpoints, s
 `phone.outbound_endpoint` once to the endpoint that should own those notes; individual
 destinations still need no configuration. `outbound_notes` is a reserved internal policy.
 
-The automatic route exposes only `phone_notes`, `phone_status`, and `end_call` to
-Gemini. The gateway reads/writes the recipient's notes directly; it does not run an
+The automatic route exposes `phone_notes`, `phone_status`, and `end_call` to
+Gemini. An active, authorized outgoing workflow also exposes `request_callback`
+so the recipient can request a continuation of the same objective to the same
+number. That narrow action grants no general scheduling or Hermes tool access.
+The gateway reads/writes the recipient's notes directly; it does not run an
 agent with the personal profile's global memory or tools. This route supports
 conversation, reminders, and recording agreed meeting details, but cannot execute
 calendar bookings or other external actions. Those need a configured route with
@@ -313,8 +324,10 @@ and include the meeting title, time/timezone, and relevant details in the brief.
 For a future **phone** request, `hfp_phone_schedule_call` creates a native Hermes
 one-shot executor job. Hermes retains the objective, evaluates the final call
 evidence and decides a bounded follow-up. The plugin executes and reports; it
-has no future-dial timer. Telegram reports the outcome and verified next step
-after each attempt rather than repeating call instructions at its start.
+has no future-dial timer. Status retains the outcome, decision and any verified
+next schedule. Gateway notices are limited to exhaustion, expiry or outcomes
+requiring guidance; scheduled retries, completion, refusal and cancellation send
+no routine outcome report. Call-only reminders send no gateway notices.
 The destination must differ from the paired handset's own SIM number.
 See [Hermes phone request lifecycle](hermes-call-workflows.md) for retry limits,
 calling hours, authorization, upgrade and data handling.
@@ -438,15 +451,18 @@ Reading notes does not save anything. Report existing details as already saved;
 claim a new save only after an update succeeds.
 
 `hfp_phone_caller_read(number)` reads a recipient's saved facts without a call.
-`hfp_phone_caller_update(number, notes)` replaces them; read first and merge useful
-existing facts before updating. Both belong to the `hfp_phone` toolset. The daemon
+`hfp_phone_caller_update(number, notes, expected_revision)` replaces them; read first,
+merge useful existing facts and supply the returned `revision` as `expected_revision`.
+Both belong to the `hfp_phone` toolset. The daemon
 normalizes the number and selects its configured route and Hermes profile. No
 profile override is accepted. Results include `number`, `profile`, `persistent`,
 and `notes`. These tools are unavailable to phone-bound sessions, including admin
 phone sessions; those use the caller-scoped tools below.
 
 Authenticated owner HTTP clients can use `POST /v1/phone/caller-notes/read` with
-`number`, or `/v1/phone/caller-notes/update` with `number` and `notes`. Notes remain
+`number`, or `/v1/phone/caller-notes/update` with `number`, `notes` and the
+`expected_revision` returned by that read. Omitting the revision returns HTTP 400;
+a stale revision returns HTTP 409 and requires a fresh read and merge. Notes remain
 bounded to 8,000 characters. New destinations use the outgoing endpoint; blocked
 numbers and ambiguous endpoint selection are rejected. With `remember: false`,
 reads return empty notes and updates are rejected. These operations use the same
@@ -756,7 +772,15 @@ Gemini remains responsible for interpreting other natural wording.
 
 ## Calls and approvals
 
-In owner chat, request a call to an explicit number; the plugin provides `hfp_phone_start_call(number)`. It reports success after the interactive voice path is ready. For outbound calls, the **destination number** selects the route and permissions. Add an explicit destination route, or a restricted default, before dialing. Never map every destination to your admin profile.
+In owner chat, request a call to an explicit number. With a purpose,
+`hfp_phone_start_call(number, purpose)` accepts an immediate native workflow;
+its receipt confirms scheduling, not voice readiness or objective completion.
+Purpose-free `hfp_phone_start_call(number)` remains raw control and reports success
+after the interactive voice path is ready. The **destination number** selects the
+route and permissions. An unmatched destination can use the automatic notes-only
+outgoing route when its endpoint is unambiguous; no number entry or guest default
+is required. Purpose-bearing workflows retain the same-profile restriction above.
+Never map every destination to your admin profile.
 
 Inbound calls use the presented caller number. `auto_answer: false` leaves permitted incoming calls unanswered until answered through phone control. Once active, the controller attaches the selected voice backend. It still declines calls without a permitted route.
 

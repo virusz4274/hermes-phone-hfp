@@ -163,10 +163,12 @@ Implemented and planned surfaces (status is explicit; planned names remain provi
   Gemini playback drops; historical overflow counters do not explain them. A
   later call worked according to the user. Low battery and the intervening
   Bluetooth/service restarts remain possible explanations, not established causes.
-- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Verify native scheduled-call voice delivery and Telegram outcome reporting after
+- [ ] [LIVE-03](docs/implementation-spec.md#live-03) — Verify native scheduled-call voice delivery and the configured gateway reporting policy after
   hangup and gateway restart, including a schedule time correction against the
   same native job (the old occurrence must not fire), busy, unanswered,
-  disconnected, missed, and partial-failure cases. Successful scheduling and a
+  disconnected, missed, and partial-failure cases. Check exhaustion/expiry/guidance
+  notices, no routine retry/completion/refusal/cancellation reports, and no gateway
+  notices for call-only reminders. Successful scheduling and a
   successful manually tested call do not establish this whole workflow. Include
   the caller's condition to wait for confirmation before hanging up. Historical
   stranded corrections are not automatically repaired.

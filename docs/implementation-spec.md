@@ -220,16 +220,25 @@ Keep original purpose, request date/timezone, deadlines, verified progress, nati
 job/run identities, revisions, and operation receipts in profile-scoped records.
 Completion, refusal, and recipient deferral require appropriate evidence; assistant
 speech alone is not completion evidence. Clear refusal closes the request. A
-specific evidenced recipient callback time may defer it. Ambiguity, exhausted
-attempts, missing capabilities, or uncertain/still-active calls require guidance,
-not blind redial. Follow-up decision authority is limited to the exact admitted
-native run; it cannot change recipient, run unrelated actions, or send messages.
+specific evidenced recipient callback time may defer it. Ambiguity, missing
+capabilities, or uncertain/still-active calls require guidance, not blind redial.
+Exhaustion ends automatic retries. Follow-up decision authority is limited to the
+exact admitted native run; it cannot change recipient, run unrelated actions, or
+send messages.
 
-Current defaults are three launched attempts total and expiry seven days after the
-first scheduled attempt; an earlier explicit deadline remains earlier on a move.
-Automatic retries use 08:00 inclusive–22:00 exclusive in the requester's timezone,
-with 10-minute then 30-minute default delays and a two-minute minimum. Explicit
-owner timing and evidenced specific recipient times have the documented hours
+Purpose-bearing workflows require the recipient's resolved profile to match the
+originating gateway's profile. Owner lookup grants do not grant cross-profile
+call authority; raw, purpose-free control uses a separate path.
+
+Current defaults are one initial attempt plus three automatic retries, with
+`phone.callbacks.retry_delays_minutes: [10, 30, 60]`. Each delay starts at the
+preceding unsuccessful call's end. Configured delays are positive integer minutes
+with a one-minute minimum; `[]` disables automatic retries. Requests save their
+policy at creation. Explicit recipient continuations retain the original chain's
+automatic retry budget without consuming it. Expiry is seven days after the first
+scheduled attempt; an earlier explicit deadline remains earlier on a move.
+Automatic retries use 08:00 inclusive–22:00 exclusive in the requester's timezone.
+Explicit owner timing and evidenced specific recipient times have the documented hours
 exception. Check automatic hours again at actual admission; late native catch-up
 outside them requires guidance. These defaults do not implement recipient-specific
 contact preferences in OFFICE-02.
@@ -240,6 +249,14 @@ across restart; unresolved edits hold admission. Hermes owns catch-up and native
 report delivery. An uncertain report claim is not republished by the plugin;
 report-only recovery must not repeat the call or decision. Preserve current
 observation limits and authority checks described in the workflow guide.
+
+Confirmed busy/unanswered attempts use deterministic retry policy. Connected
+reminders close without an outcome agent and record that hearing is unconfirmed;
+broader connected objectives retain evidence-based evaluation. Status retains
+attempts, decisions and verified schedules. Scheduled retries, completion, refusal
+and cancellation produce no routine gateway report. Gateway notices cover
+exhaustion, expiry or outcomes requiring guidance; call-only reminders send none.
+Both-mode reminders retain their separate initial notification.
 
 Legacy terminal callbacks remain history; legacy pending callbacks are held for
 explicit review/migration or cancellation. Do not activate both schedulers or
@@ -456,7 +473,10 @@ uncertain recognition, conflicts, duplicate prevention, and save-failure reporti
 **Native scheduling, outcomes, and delivery.** Verify schedule, correction, and
 hangup against the single native job. The old occurrence must not fire; the
 compatibility reminder ID is the same job. Verify actual conversation, evidenced
-objective completion, and Telegram outcome/decision delivery. Exercise a bounded
+objective completion and retained decisions. With gateway outcome delivery enabled,
+verify exhaustion/expiry/guidance notices and the absence of routine retry,
+completion, refusal and cancellation reports. Call-only reminders send no gateway
+notices; both-mode reminders retain their separate initial notification. Exercise a bounded
 retry after a known missed/busy outcome, specific recipient deferral, refusal with
 no future attempt, cancellation without forced hangup, and preserved progress.
 Include restart, duplicate admission, native catch-up, automatic hours/deadlines,

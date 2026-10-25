@@ -1,7 +1,7 @@
 # Progress record for docs/implementation-spec.md.
 # Current acceptance is separate from historical_acceptance (superseded definitions/evidence).
 # progress_note describes partial implementation, not a completion override.
-# Reconciled 2026-10-09; the baseline below remains historical.
+# Reconciled 2026-10-09; workflow policy updated 2026-10-25. Historical evidence is preserved.
 schema_version: 1
 spec: "docs/implementation-spec.md"
 baseline:
@@ -516,12 +516,18 @@ items:
       exact-call evidence.
     - Keep original objective/date, narrow authority, durable attempts, verified progress, native identities,
       and report claims across restarts.
-    - Use three attempts total, seven-day expiry from the first scheduled attempt, earlier explicit deadlines,
-      and 08:00–22:00 automatic retry hours in the requester timezone. Default retry delays are 10 then
-      30 minutes, minimum two minutes; explicit owner timing and evidenced recipient times have the documented
-      hours exception.
-    - Require evidence for completion/refusal/deferral; uncertain or still-active calls, ambiguity, exhausted
-      attempts and missing capabilities require guidance.
+    - Save the configured retry policy per request. Default to an initial attempt plus three automatic
+      retries after 10, 30 and 60 minutes from each unsuccessful call's end; positive integer delays have
+      a one-minute minimum, and an empty list disables retries. Explicit recipient continuations preserve
+      the chain's automatic retry budget without consuming it. Keep seven-day expiry, earlier explicit
+      deadlines and 08:00–22:00 automatic hours; explicit owner/recipient times retain the hours exception.
+    - Require the recipient's resolved profile to match the originating workflow profile; lookup grants
+      do not grant cross-profile call authority. Raw purpose-free controls use their separate path.
+    - Retain outcomes, decisions and verified schedules in status. Send no routine retry, completion,
+      refusal or cancellation report. Gateway notices cover exhaustion, expiry or outcomes requiring
+      guidance; call-only reminders send none. Both-mode reminders retain their initial notification.
+    - Require evidence for completion/refusal/deferral; uncertain or still-active calls, ambiguity and
+      missing capabilities require guidance. Exhaustion ends automatic retries.
     - Cancellation prevents future attempts and late decisions without hanging up an admitted call. Native
       delivery owns report receipts/retry policy; the plugin never republishes an uncertain report claim.
     acceptance:
@@ -558,20 +564,26 @@ items:
         - docs/hermes-owner-flow-verification-2026-10-08.md
         - tests/test_phone_workflows.py
     - id: WORKFLOW-01-A3
-      scenario: Exercise retry delays, actual catch-up hours at 07/08/21/22, deadlines, and exhausted attempts.
-      expected: Respect default windows and limits, verify the next native job, and require guidance when
-        admission is outside hours or attempts are exhausted.
+      scenario: Exercise saved retry policies, four default attempts, one-minute configured delays,
+        actual catch-up hours at 07/08/21/22, deadlines, and exhausted attempts.
+      expected: Respect saved delays and windows, verify each next native job, require guidance outside
+        admitted hours, and stop on exhaustion with one short notice when gateway delivery is enabled.
       verification: automated
       status: passed
       evidence:
-      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
-          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
-        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
-          regressions only, no live calls or messages.
-        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+      - command_or_procedure: .venv/bin/python -m pytest -q tests/test_callback_policy.py tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py tests/test_outgoing_routes.py
+          tests/test_callback_rescheduling.py tests/test_gateway_reminder_delivery.py tests/test_phone_routing.py
+        result: 161 passed, one existing Starlette warning, 7.19 seconds on 2026-10-25; synthetic regressions
+          only, no live calls or messages. Read-only probes also confirmed one-minute configuration,
+          cross-profile rejection despite a lookup grant, and quiet retry/completion/refusal/cancellation reports.
+        tested_revision: main 8b7c8afc46deab9c1b7776adee16e779e02a1a8d with documentation-only corrections
         references:
-        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_callback_policy.py
         - tests/test_phone_workflows.py
+        - tests/test_reminders.py
+        - src/hfp_mcp/routing.py
+        - src/hfp_mcp/phone_workflows.py
     - id: WORKFLOW-01-A4
       scenario: Cancel an active request; try expired/guest authority, a wrong call/run, cross-profile access,
         and revoked report authority.
@@ -589,21 +601,27 @@ items:
         - docs/hermes-owner-flow-verification-2026-10-08.md
         - tests/test_phone_workflows.py
     - id: WORKFLOW-01-A5
-      scenario: Run a synthetic missed-call decision/report and repeat report retrieval; generate a later
-        attempt brief.
-      expected: Publish one report claim with a verified next schedule; original request date and verified
-        progress remain in later briefs.
+      scenario: Run synthetic missed-call retries through exhaustion and repeat report retrieval;
+        generate a later attempt brief and inspect completion/refusal/cancellation reporting.
+      expected: Routine retries and completion/refusal/cancellation publish no report. Claim an exhaustion
+        report once; original request date and verified progress remain in later briefs. Call-only
+        reminders publish no gateway outcome notices.
       verification: automated
       status: passed
       evidence:
-      - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
-          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
-        result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
-          regressions only, no live calls or messages.
-        tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+      - command_or_procedure: .venv/bin/python -m pytest -q tests/test_callback_policy.py tests/test_phone_workflows.py
+          tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py tests/test_outgoing_routes.py
+          tests/test_callback_rescheduling.py tests/test_gateway_reminder_delivery.py tests/test_phone_routing.py
+        result: 161 passed, one existing Starlette warning, 7.19 seconds on 2026-10-25; synthetic regressions
+          only, no live calls or messages. Read-only probes also confirmed one-minute configuration,
+          cross-profile rejection despite a lookup grant, and quiet retry/completion/refusal/cancellation reports.
+        tested_revision: main 8b7c8afc46deab9c1b7776adee16e779e02a1a8d with documentation-only corrections
         references:
-        - docs/hermes-owner-flow-verification-2026-10-08.md
+        - tests/test_callback_policy.py
         - tests/test_phone_workflows.py
+        - tests/test_reminders.py
+        - src/hfp_mcp/routing.py
+        - src/hfp_mcp/phone_workflows.py
     - id: WORKFLOW-01-A6
       scenario: Exercise missing native capabilities, model/observation timeouts, report-only recovery after
         a dead worker, and legacy pending-job upgrade.
@@ -615,10 +633,46 @@ items:
     implementation_refs:
     - docs/hermes-owner-flow-verification-2026-10-08.md
     - docs/hermes-call-workflows.md
-    progress_note: Implemented and installed per the dated report. Scoped tests rerun during documentation
-      reconciliation; broader prerequisite and acceptance coverage remains open. No new-flow live acceptance
-      has been performed.
+    progress_note: Implemented and installed per the dated report. Retry and reporting definitions reconciled
+      against main on 2026-10-25; superseded definitions and evidence are retained below. Broader prerequisite
+      and acceptance coverage remains open. No new-flow live acceptance has been performed.
     blocker: null
+    historical_acceptance:
+    - superseded_on: '2026-10-25'
+      reason: Reconcile default retry budget and quiet gateway reporting with the current implementation;
+        earlier evidence remains historical and does not establish the revised acceptance.
+      checks:
+      - source_acceptance_id: WORKFLOW-01-A3
+        scenario: Exercise retry delays, actual catch-up hours at 07/08/21/22, deadlines, and exhausted attempts.
+        expected: Respect default windows and limits, verify the next native job, and require guidance when
+          admission is outside hours or attempts are exhausted.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+            tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+          result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+            regressions only, no live calls or messages.
+          tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+          references:
+          - docs/hermes-owner-flow-verification-2026-10-08.md
+          - tests/test_phone_workflows.py
+      - source_acceptance_id: WORKFLOW-01-A5
+        scenario: Run a synthetic missed-call decision/report and repeat report retrieval; generate a later
+          attempt brief.
+        expected: Publish one report claim with a verified next schedule; original request date and verified
+          progress remain in later briefs.
+        verification: automated
+        status: passed
+        evidence:
+        - command_or_procedure: PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_phone_workflows.py
+            tests/test_workflow_execution.py tests/test_reminders.py tests/test_owner_notes.py
+          result: 61 passed, one existing Starlette warning, 2.58 seconds on 2026-10-09; scoped synthetic
+            regressions only, no live calls or messages.
+          tested_revision: 2026-10-09 working tree based on 1d3a405; source tests, not a committed release
+          references:
+          - docs/hermes-owner-flow-verification-2026-10-08.md
+          - tests/test_phone_workflows.py
   - id: TASK-03
     title: Current intent and hangup handling
     kind: implementation
@@ -1419,14 +1473,16 @@ items:
     - docs/phone-routing.md
     - docs/compatibility.md
     requirements:
-    - Verify physical call objectives, native schedule changes/follow-ups, and Telegram outcome reports;
-      scheduling acceptance alone is not delivery.
+    - Verify physical call objectives, native schedule changes/follow-ups and retained decisions, plus
+      exhaustion/expiry/guidance notices when gateway outcome delivery is enabled. Routine retry,
+      completion/refusal/cancellation reports are suppressed; call-only reminders send no gateway notices.
+      Both-mode reminders retain their initial notification. Scheduling acceptance alone is not delivery.
     acceptance:
     - id: LIVE-03-A1
-      scenario: Schedule, correct the time, and hang up; inspect the single native job and observe the actual
-        call and Telegram outcome report.
-      expected: The old occurrence does not fire; saved time, spoken outcome and report agree. reminder_job_id
-        aliases cron_job_id, not a companion message.
+      scenario: Schedule a phone-only reminder, correct the time, and hang up; inspect the single native
+        job, observe the actual call and inspect its retained outcome.
+      expected: The old occurrence does not fire; saved time, spoken outcome and status agree. reminder_job_id
+        aliases cron_job_id. No companion notification or gateway outcome notice is sent.
       verification: live
       status: pending
       evidence: []
@@ -1448,7 +1504,8 @@ items:
     - id: LIVE-03-A4
       scenario: Observe evidenced completion, a missed-call retry, specific recipient deferral, refusal,
         cancellation and later progress recall (manual R19–R26).
-      expected: Actual calls and Telegram decisions match evidence and limits; cancellation stops future
+      expected: Actual calls, retained decisions and failure/guidance notices match evidence and configured
+        limits. Routine retry/completion/refusal/cancellation reports are absent. Cancellation stops future
         attempts without forcing hangup.
       verification: live
       status: pending
