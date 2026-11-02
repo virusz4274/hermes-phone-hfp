@@ -9,7 +9,7 @@ normal install source; there is no separate release branch or per-fix tagging pr
 | Installer | Changes when run | Service behavior |
 | --- | --- | --- |
 | `sudo bash setup/install.sh [--with-gemini]` | Installs/updates dependencies and the daemon package, refreshes its service and Bluetooth configuration, preserves existing environment settings and reconciles control credentials | Enables the HFP user service, restarts Bluetooth and the daemon, and checks daemon liveness |
-| `python3 setup/install_hermes.py --home … --python …` | Installs/updates the supporting Python package in Hermes, backs up and replaces the phone plugin, removes obsolete phone-plugin copies from discovery, enables the new plugin, and connects both environment files to the routing YAML (creating an empty-route starter if missing) | Does not restart Hermes |
+| `python3 setup/install_hermes.py --home … --hermes …` | Uses Hermes PM to publish the plugin and its bundled portable package, backs up replaced files, removes obsolete phone-plugin copies from discovery, enables the plugin, and connects both environment files to the routing YAML (creating an empty-route starter if missing) | Does not restart Hermes |
 
 The Hermes installer automates the routing file path and starter YAML. Neither installer chooses caller numbers/routes, creates Hermes profiles, provisions Hermes/Gemini provider credentials or configures business integrations. The plugin installer also leaves Hermes platform toolset selection to the operator. Follow [Installation](install.md) to complete those steps.
 
@@ -17,11 +17,11 @@ The Hermes installer automates the routing file path and starter YAML. Neither i
 
 1. Finish active calls and inspect `hfp-mcp phone status` for continued tasks and native phone workflows. Settle or cancel affected work and wait for native call/decision/report workers to finish before stopping services. Cancellation prevents future attempts; hangup is separate. Choose the intended revision and save local configuration changes.
 2. Stop the affected Hermes gateway while replacing its plugin. For an installed default gateway service, use `systemctl --user stop hermes-gateway.service`; use the corresponding unit for a named profile or stop a foreground gateway in its terminal.
-3. Run the Bluetooth installer, retaining `--with-gemini` if you use Gemini. Run the Hermes installer for each participating profile with its existing home and interpreter.
+3. Run the Bluetooth installer, retaining `--with-gemini` if you use Gemini. Run the Hermes installer with the existing home and managed launcher. For a plugin-only environment repair, leave the daemon installed and rerun only the Hermes installer.
 4. Validate the routing YAML with `.venv/bin/hfp-mcp route validate` and check each role with `route explain <number>`.
 5. Start the affected Hermes gateway. Check `.venv/bin/hfp-mcp phone status`, run `doctor`, and perform the relevant [hardware acceptance checks](phone-routing.md#hardware-acceptance).
 
-Package installation can update dependencies. Plugin file backups do not roll back Python dependencies or OS packages; reinstall a chosen package revision separately if needed.
+Package installation can update dependencies. Plugin file backups do not roll back Python dependencies or OS packages; reinstall a chosen package revision separately if needed. Managed Hermes is required by the new installer; `--python` has been replaced by `--hermes`. Hermes PM retains the declared package during environment rebuilds. Reapply local phone code changes with this installer rather than independently updating the generated plugin folder.
 
 ## Editing configuration
 
@@ -52,9 +52,9 @@ The Gemini demo updates add callback revisions, durable schedule operations,
 reminder-creation claims and trusted call-source attribution through additive
 SQLite migrations. Upgrade daemon and participating Hermes environments from the
 same tested distribution, then restart both services after calls and continued
-tasks settle. For an existing configured installation, installing the same wheel
-with `pip install --no-deps --force-reinstall <wheel>` in both environments avoids
-changing Bluetooth configuration or dependency versions. Confirm module hashes,
+tasks settle. For an existing configured installation, install the selected wheel
+in the daemon environment and rerun the Hermes installer from the same source
+revision. Hermes PM owns its environment; do not mutate it with pip. Confirm module hashes,
 new authenticated capabilities and migrated columns after restart; a matching
 package version alone is insufficient. No guest route or owner-access grant is
 created automatically.
@@ -116,7 +116,7 @@ This procedure removes an installed phone integration. It does not delete the ne
    ```
 
 2. Back up the HFP files listed above. Remove the installed `~/.config/systemd/user/hfp-mcp.service` and any HFP-specific drop-ins. If an older setup added `hermes-gateway.service.d/20-hfp-phone.conf`, remove that file so Hermes no longer starts the old daemon or loads its environment.
-3. In each participating Hermes profile, remove `hfp-phone` and obsolete `hfp-call-awareness` plugin entries, HFP MCP registrations, and `hfp_phone`/`hfp_caller` references from `platform_toolsets` and `known_plugin_toolsets`. Remove only phone-related entries. Remove HFP-specific environment variables and stale phone-operation skills. Remove the installed phone-plugin directories from `plugins/`, including obsolete disabled or backup copies that remain discoverable. If no other profile using that interpreter needs the phone plugin, uninstall the supporting package with `<hermes-python> -m pip uninstall hfp-mcp`; keep shared dependencies.
+3. In each participating Hermes profile, remove the plugin through `hermes plugins remove hfp-phone` so Hermes PM can update its dependency selection. Remove obsolete `hfp-call-awareness` plugin entries, HFP MCP registrations, and `hfp_phone`/`hfp_caller` references from `platform_toolsets` and `known_plugin_toolsets`. Remove only phone-related entries. Remove HFP-specific environment variables, stale phone-operation skills, and obsolete disabled or backup plugin copies that remain discoverable. Do not pip-uninstall packages from Hermes's managed environment.
 4. Archive or remove the daemon environment, phone YAML/state and the profile's `hfp-phone/` stores according to your retention needs. Remove only identified phone-workflow native cron jobs and generated executor/report scripts after their workers have settled; leave unrelated jobs/scripts alone. Preserve unrelated sections in shared YAML. Historical Hermes chats, native delivery history and external calendar records require separate management in their owning systems.
 5. Remove only HFP-specific host overrides if present: `/etc/dbus-1/system.d/hfp-mcp.conf`, WirePlumber's `90-hfp-mcp.conf` or `90-hfp-mcp.lua`, and the obsolete `99-hfp-audio.conf`. Check both `/etc/wireplumber/` and your user WirePlumber configuration directories. Leave shared Bluetooth packages, pairing records and unrelated audio settings intact.
 6. Reload the systemd user configuration with `systemctl --user daemon-reload`. If the D-Bus policy changed, run `sudo systemctl reload dbus.service`. If WirePlumber overrides changed, restart the active WirePlumber user service. Start the affected Hermes gateways again.

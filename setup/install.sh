@@ -202,7 +202,7 @@ Installation complete.
 3. Verify:
    $REPO_DIR/.venv/bin/hfp-mcp doctor
 4. Optional Hermes integration (no profile is created):
-   $REPO_DIR/.venv/bin/python $REPO_DIR/setup/install_hermes.py --home <existing-hermes-home> --python <hermes-venv-python>
+   $REPO_DIR/.venv/bin/python $REPO_DIR/setup/install_hermes.py --home <existing-hermes-home> --hermes <hermes-launcher>
    See $REPO_DIR/docs/install.md for the complete first-time setup.
 5. Local MCP endpoint: http://127.0.0.1:8000/mcp
    The bearer token is synchronized between the mode-0600 environment and

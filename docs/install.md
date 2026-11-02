@@ -58,19 +58,19 @@ Optional settings stay visible as commented lines (`#HFP_...=...`) with short ex
 
 ## 3. Install the one Hermes plugin
 
-Select the Hermes home and Python interpreter used by your existing Hermes installation. For a typical default installation:
+Select the home used by your existing managed Hermes installation. For a typical default installation:
 
 ```bash
 python3 setup/install_hermes.py \
   --home ~/.hermes \
-  --python ~/.hermes/hermes-agent/venv/bin/python
+  --hermes hermes
 ```
 
-Use your actual interpreter path if it differs; it must support `python -m pip`. The launcher itself needs only Python's standard library. The installer installs its dependencies and writes plugin configuration using the selected Hermes interpreter.
+Use `--hermes /absolute/path/to/hermes` if the launcher is not on PATH. The installer uses Hermes's published runtime command to select its current Python and dependencies. Managed Hermes with staged plugin publication support is required; the old `--python` option is no longer supported.
 
-The installer copies **only `hermes_phone_plugin/`** to `~/.hermes/plugins/hfp-phone/`, installs the supporting Python package, and enables the plugin. It backs up replaced files outside plugin discovery. It preserves other plugins and the selected profile's model settings. It creates no profile and restarts no gateway.
+The installer stages `hermes_phone_plugin/` with the supporting `hfp_mcp` source and build metadata. Hermes PM publishes it to `~/.hermes/plugins/hfp-phone/`, installs the portable package into its managed environment, and enables the plugin. Package build inputs remain with Hermes's dependency snapshots, so moving the original checkout does not remove the installed package. The installer backs up replaced files outside plugin discovery, preserves other plugins and the selected profile's model settings, and creates no profile or gateway restart.
 
-The Hermes installer installs the portable base package with normal dependency resolution. The daemon-only MCP SDK and uvicorn are excluded, preserving Hermes’s own MCP dependency. Native `dbus-python` and `PyGObject` bindings belong to the `daemon` extra, which the Bluetooth installer selects automatically. Hermes does not need those native bindings, even when its Python version differs from the system Python. If an earlier plugin installation reported them as missing, rerun the current Hermes installer to replace the old package metadata.
+Hermes PM resolves the portable package with its own dependencies. The daemon-only MCP SDK, uvicorn, Gemini SDK, and native `dbus-python`/`PyGObject` bindings are excluded. The portable package supports Python 3.11–3.14; the Bluetooth daemon keeps its separate Python 3.11–3.13 environment. After a Hermes environment migration, rerun this installer and restart the gateway when idle; do not pip-install into a guessed Hermes venv.
 
 ## 4. Configure your first caller route
 

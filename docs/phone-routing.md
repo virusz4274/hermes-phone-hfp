@@ -40,7 +40,7 @@ HFP_HERMES_BRIDGE_KEY=<same-binding-secret-as-the-daemon>
 
 Protect these files with mode 0600. An explicitly configured Gemini route enables the provider directly. Model/voice provider environment options remain supported.
 
-Install the new plugin into each participating existing Hermes home with `setup/install_hermes.py`. The `--python` argument selects Hermes's interpreter, not the HFP virtualenv. The selected interpreter must have pip available.
+Install the plugin into the selected existing Hermes home with `setup/install_hermes.py`. The optional `--hermes` argument selects the managed Hermes launcher; its package manager owns the plugin's portable dependencies. The HFP daemon keeps its own virtualenv.
 
 Hermes's `api_server` toolset selection governs API sessions. For personal admin parity, configure that platform with the same toolsets you use in owner chat; the installer preserves existing model/tool configuration rather than silently widening it. Normal Hermes approval rules remain in effect.
 
@@ -102,7 +102,7 @@ Install the same plugin into the guest profile, from this repository:
 ```bash
 python3 setup/install_hermes.py \
   --home ~/.hermes/profiles/guest \
-  --python ~/.hermes/hermes-agent/venv/bin/python
+  --hermes hermes
 ```
 
 For a separate gateway, add these to `~/.hermes/profiles/guest/.env`. Generate two

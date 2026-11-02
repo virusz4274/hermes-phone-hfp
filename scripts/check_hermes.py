@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import runpy
 import socket
 import subprocess
 import sys
@@ -77,6 +78,13 @@ async def exercise():
     manifest = PluginManifest(name="hfp-phone", version="0.1.1rc1", source="user")
     manager._plugins["hfp-phone"] = LoadedPlugin(manifest=manifest, enabled=True)
     context = PluginContext(manifest, manager)
+    # Current Hermes obtains delivery platforms from plugin registrations. A
+    # synthetic transport keeps the real resolver test offline and independent
+    # of Slack SDK installation or credentials.
+    context.register_platform(
+        name="slack", label="Compatibility Slack", adapter_factory=lambda config: None,
+        check_fn=lambda: True, cron_deliver_env_var="SLACK_HOME_CHANNEL",
+    )
     hermes_bridge.register(context)
     from hermes_cli import plugins as native_plugins
     native_plugins._plugin_manager = manager
@@ -329,35 +337,56 @@ async def exercise():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hermes-root", type=Path)
+    parser.add_argument("--hermes", help="Use the installed managed Hermes launcher")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--child-home", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.child:
+        if not args.child_home:
+            parser.error("--child requires --child-home")
+        if args.hermes_root:
+            sys.path.insert(0, str(args.hermes_root.resolve()))
+        # Select the real installation's dependencies before isolating test state.
+        # Starting under a fresh HERMES_HOME would provision all Hermes extras.
+        import hermes_bootstrap
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        home = args.child_home.resolve()
+        os.environ.clear()
+        os.environ.update({
+            "PATH": os.defpath,
+            "HOME": str(home), "HERMES_HOME": str(home), "HERMES_PROFILE": "default",
+            "XDG_STATE_HOME": str(home / "state"), "XDG_CACHE_HOME": str(home / "cache"),
+            "HFP_MCP_ENV_FILE": str(home / "missing.env"), "HF_HUB_OFFLINE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
+        from hermes_constants import set_hermes_home_override
+        set_hermes_home_override(home)
+        os.chdir(home)
         asyncio.run(exercise())
         return
-    if not args.hermes_root or not (args.hermes_root / "hermes_state.py").is_file():
-        parser.error("--hermes-root must identify a Hermes source checkout")
+    if not args.hermes and (not args.hermes_root or not (args.hermes_root / "hermes_state.py").is_file()):
+        parser.error("provide --hermes launcher or --hermes-root source checkout")
     with tempfile.TemporaryDirectory(prefix="hfp-hermes-compat-") as directory:
-        home = Path(directory)
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": directory,
-            "HERMES_HOME": directory,
-            "HERMES_PROFILE": "default",
-            "XDG_STATE_HOME": str(home / "state"),
-            "XDG_CACHE_HOME": str(home / "cache"),
-            "HFP_MCP_ENV_FILE": str(home / "missing.env"),
+            "HOME": str(Path.home()),
             "HF_HUB_OFFLINE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPATH": os.pathsep.join(
-                [
-                    str(Path(__file__).resolve().parents[1] / "src"),
-                    str(args.hermes_root.resolve()),
-                ]
-            ),
         }
+        if os.environ.get("HERMES_HOME"):
+            env["HERMES_HOME"] = os.environ["HERMES_HOME"]
+        arguments = ["--child", "--child-home", directory]
+        if args.hermes_root:
+            arguments += ["--hermes-root", str(args.hermes_root.resolve())]
+        if args.hermes:
+            installer = runpy.run_path(str(Path(__file__).resolve().parents[1] / "setup/install_hermes.py"))
+            command = installer["managed_script_command"](
+                args.hermes, Path(__file__).resolve(), arguments, env=env,
+            )
+        else:
+            command = [sys.executable, "-B", str(Path(__file__).resolve()), *arguments]
         subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--child"],
-            cwd=directory,
+            command,
             env=env,
             check=True,
             timeout=120,

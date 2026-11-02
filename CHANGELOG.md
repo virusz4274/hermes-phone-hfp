@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Breaking installer change: use `--hermes` with managed Hermes instead of
+  `--python`. Bundle the portable supporting package as a buildable plugin so
+  Hermes PM retains it across dependency environment rebuilds. Add portable
+  Python 3.14 support; the daemon remains on Python 3.11–3.13. Existing scheduled
+  scripts keep their imports and require no rewriting.
+
 - Clarify Gemini's existing hangup instruction: only a current-caller request or
   goodbye ends the conversation; completing a task does not. No additional model
   checks, tool arguments, or confirmation steps are introduced.

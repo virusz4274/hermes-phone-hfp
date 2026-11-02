@@ -29,7 +29,7 @@ def validate_gateway_destination(destination: dict) -> None:
     if not any(t['id'] == destination['platform'] for t in cron_delivery_targets()):
         raise ValueError('The scheduled Hermes gateway is no longer configured or enabled')
 
-TESTED_HERMES_COMMIT = "819988acb750836387fbb9d5d76203a9b3f530f4"
+TESTED_HERMES_COMMIT = "085f562af53a6fedadac3681e2c498fc71316132"
 REQUIRED_RUN_FEATURES = frozenset(
     {
         "run_submission",
