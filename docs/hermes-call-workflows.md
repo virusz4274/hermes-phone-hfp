@@ -8,6 +8,10 @@ assume a connected call completed the request.
 `hfp_phone_start_call` uses the same flow for purpose-bearing requests, scheduling
 the first attempt immediately. Raw, purpose-free phone control remains manual.
 Ordinary phone objectives do not create an additional call-time notification.
+The recipient's resolved profile must match the originating Hermes gateway's
+profile for both purpose-bearing tools. A recipient routed to another profile
+is rejected before native job creation or dialing, even with an owner lookup
+grant. Raw, purpose-free controls use their separate call-control path.
 Confirmed busy and unanswered calls use a deterministic retry policy. Connected
 reminders finish without a separate decision agent; hearing is never inferred
 from connection or generated speech. Broader connected objectives retain a
@@ -42,6 +46,7 @@ phone:
 
 The initial attempt plus this list permits four attempts. Each delay starts at
 the end of the preceding unsuccessful call: roughly 10:00 → 10:10 → 10:40 → 11:40.
+Configured delays are positive integer minutes, with a minimum of one minute.
 An empty list disables automatic retries. Later configuration changes affect new
 requests only; existing requests keep their saved policy. Code enforces counters,
 cancellation and duplicate prevention. Native Hermes jobs remain the only clock.

@@ -57,7 +57,7 @@ Available in your Hermes owner chat channels (e.g. Telegram, Discord, CLI) to co
 - `hfp_phone_start_call`: With a purpose, create an immediate native Hermes phone workflow. Acceptance confirms scheduling, not completed conversation. Purpose-free use remains raw manual call control.
 - `hfp_phone_caller_read` / `hfp_phone_caller_update`: Read or replace a number's saved notes from owner chat, using the same routed memory as phone calls. Read notes first and supply the returned revision as `expected_revision` when replacing them. For remembered facts and call summaries, use notes first; consult transcripts when notes are insufficient or exact dialogue is requested.
 - `hfp_phone_status`: Inspect live call/routing state and profile-scoped requests, attempts, schedules, and decisions.
-- `hfp_phone_schedule_call` / `hfp_phone_reschedule_callback`: Create or move a native Hermes call job using the callback ID, revision and stable change request ID. Hermes evaluates the call outcome and owns bounded follow-up; the configured gateway reports its decision. See [the workflow guide](docs/hermes-call-workflows.md).
+- `hfp_phone_schedule_call` / `hfp_phone_reschedule_callback`: Create or move a native Hermes call job using the callback ID, revision and stable change request ID. Hermes owns bounded follow-up; status retains decisions and schedules, with gateway notices for exhaustion, expiry or outcomes requiring guidance. See [the workflow guide](docs/hermes-call-workflows.md).
 - `hfp_phone_schedule_reminder`: Deliver reminders requested during calls by gateway notification, callback, or both. Set `phone.reminders.default_delivery` in the existing YAML; Hermes selects its configured default gateway destination automatically. Explicit delivery requests override the default. Set `phone.callbacks.retry_delays_minutes: [10, 30, 60]` for four total missed-call attempts; `[]` disables retries. Callbacks preserve the current purpose, support recipient-requested times, and keep receipts in diagnostics. See [reminder configuration](docs/phone-routing.md).
 - `hfp_phone_cancel_callback`: Cancel future attempts of a request; ending an already admitted call requires a separate hangup.
 - `hfp_phone_owner_lookup`: Read permitted notes, call metadata or retained transcript excerpts with filters and continuation cursors. Admin callers can also use Gemini's `owner_call_lookup`.
@@ -69,6 +69,9 @@ endpoint they receive Gemini conversation and per-number notes automatically;
 incoming access and private tool permissions still require their own configured
 route. Existing number routes retain their permissions. See
 [outgoing calls](docs/phone-routing.md#outgoing-calls-with-a-purpose) for details.
+Purpose-bearing calls require the recipient's resolved profile to match the
+originating Hermes gateway's profile; lookup grants do not authorize calls across
+profiles.
 
 ### 2. Caller Context & Memory Tools (`hfp_caller` toolset)
 Provided to Hermes during a call to interact with caller-specific data without leaking cross-caller information:
