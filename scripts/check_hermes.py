@@ -14,6 +14,77 @@ import sys
 import tempfile
 
 
+async def exercise_canonical_identity(bridge, adapter, manager, home, root):
+    """Real admission and TurnRunner approval context, with no model or transport."""
+    from contextvars import copy_context
+    from types import SimpleNamespace
+    from gateway.config import GatewayConfig
+    from gateway.run_turn_runner import TurnRunner
+    from gateway.session import SessionStore
+    from gateway.session_api_turn import admit_api_turn, current_api_run_id
+    from gateway.session_authority import SessionAuthority
+    from gateway.session_ingress import execute_admission
+    from gateway.session_results import execution_result
+    from gateway.turn_context import TurnContext
+    from hermes_state import SessionDB
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, settle_session_input
+    from hfp_mcp.hermes_compat import current_run_id
+    from tools.approval_context import get_current_session_key
+
+    db = SessionDB(home / 'state.db')
+    sessions = SessionStore(config=GatewayConfig(), sessions_dir=home / 'sessions')
+    sessions._db = db
+    runner = SimpleNamespace(_draining=False, session_store=sessions,
+        _consume_pending_native_image_paths=lambda _: [])
+    authority = SessionAuthority(runner, profile_id='default', instance_id='compat', db=db,
+        epoch=begin_runtime_epoch(db, instance_id='compat'))
+    runner.session_authority = authority
+    runner._adapter_for_source = lambda _: adapter
+    original_runner, original_db = adapter.gateway_runner, adapter._session_db
+    adapter.gateway_runner, adapter._session_db = runner, db
+    retained = []
+
+    def run(message, **kwargs):
+        assert get_current_session_key() != current_api_run_id()
+        assert current_run_id() == current_api_run_id()
+        assert bridge.authorize(root, 'terminal')['run_id'] == current_api_run_id()
+        results = manager.invoke_hook('pre_tool_call', session_id=root, tool_name='terminal', args={})
+        assert not any(r and r.get('action') == 'block' for r in results), results
+        assert 'Live phone task:' in bridge.before_llm(session_id=root)['context']
+        retained.append(copy_context())
+        return {'final_response': 'Verified authorization without executing a system command.'}
+
+    async def handle(event):
+        turn = object.__new__(TurnRunner)
+        turn._ctx = TurnContext(message=event.text, session_id=root,
+            session_key=authority.sessions[root].route, source=event.source)
+        turn._runner = runner
+        turn._approval_notify_sync = lambda *args, **kwargs: None
+        result = await asyncio.to_thread(turn._run_conversation_with_approval,
+            SimpleNamespace(run_conversation=run), [], [], None, None)
+        execution_result.get()['result'] = result
+        return result['final_response']
+
+    runner._handle_message = handle
+    try:
+        for run_id in ('run_compat_first', 'run_compat_second'):
+            bridge.store.bind_run(run_id, 'hfp-test', root)
+            _, ref, row = admit_api_turn(adapter, session_id=root, active_run_id=run_id,
+                user_message='Synthetic RAM authorization check', conversation_history=[])
+            row = claim_session_input(db, epoch=authority.epoch, session_id=root)
+            await execute_admission(authority, ref, row)
+            settle_session_input(db, epoch=authority.epoch, admission_id=row['admission_id'],
+                generation=row['generation'], outcome='completed')
+            assert current_api_run_id() is None
+        assert retained[0].run(current_run_id) == 'run_compat_first'
+        assert retained[1].run(current_run_id) == 'run_compat_second'
+        bridge.store.revoke('hfp-test')
+        assert retained[0].run(bridge.before_tool, session_id=root, tool_name='terminal')['action'] == 'block'
+    finally:
+        adapter.gateway_runner, adapter._session_db = original_runner, original_db
+        db.close()
+
+
 async def exercise():
     # All provider/network attempts must fail; this test uses only in-process HTTP.
     def no_network(*args, **kwargs):
@@ -274,6 +345,7 @@ async def exercise():
     # Context propagation is the actual Hermes run identity API.
     set_current_session_key("run-test")
     assert bridge.before_tool(session_id=root, tool_name="terminal") is None
+    await exercise_canonical_identity(bridge, adapter, manager, home, root)
     store.revoke("hfp-test")
     assert (
         bridge.before_tool(session_id=root, tool_name="terminal")["action"] == "block"
@@ -330,7 +402,7 @@ async def exercise():
     assert not move_reminder(job_id, changed_due + 600)['verified']
     store.close()
     print(
-        "PASS: native plugin/auth/session APIs, non-Telegram default resolution, linked reminder/callback creation/move/cancel, notification claims, separate outcome reporting and reminder read-back; no calls or messages sent"
+        "PASS: native plugin/auth/session APIs, canonical Runs identity through TurnRunner and plugin hooks, sequential/late-worker identity and revocation, non-Telegram default resolution, linked reminder/callback creation/move/cancel, notification claims, separate outcome reporting and reminder read-back; no calls or messages sent"
     )
 
 

@@ -19,6 +19,7 @@ from aiohttp import web
 from .caller_context import CallerStore, NoteConflict
 from .contracts import CALLER_BINDING_TTL_SECONDS, normalize_phone_number, validate_call_purpose
 from .routing import RoutingConfig
+from .hermes_compat import current_run_id
 
 # Integrations opt in by registering an execution wrapper that receives a trusted
 # binding. Merely giving an arbitrary tool the same name never authorizes it.
@@ -123,9 +124,8 @@ class PhoneBridge:
         # chain. The immutable run association still identifies phone execution,
         # including late threads after hangup or history deletion.
         try:
-            from tools.approval_context import get_current_session_key
-            run_id = get_current_session_key()
-        except ImportError:
+            run_id = current_run_id()
+        except (ImportError, PermissionError):
             run_id = None
         with self.store._lock:
             if run_id and self.store.db.execute("SELECT 1 FROM run_bindings WHERE run_id=?", (run_id,)).fetchone():
@@ -140,9 +140,8 @@ class PhoneBridge:
     def execution_binding(self, session_id):
         if not self.is_managed(session_id):
             return {**self.store.binding(session_id), "binding_id": session_id}
-        from tools.approval_context import get_current_session_key
         from .hermes_sessions import managed_root
-        binding = self.store.run_binding(get_current_session_key())
+        binding = self.store.run_binding(current_run_id())
         if managed_root(self.store, session_id) != binding["root_id"]:
             raise PermissionError("run does not own this native conversation")
         return binding
@@ -151,8 +150,7 @@ class PhoneBridge:
         sid = str(kwargs.get("session_id") or "")
         if sid.startswith("hfp-followup-"):
             try:
-                from tools.approval_context import get_current_session_key
-                self.workflows.decision_authority(sid, get_current_session_key())
+                self.workflows.decision_authority(sid, current_run_id())
                 target = 'hfp_phone_apply_followup_decision'
                 name, args = kwargs.get('tool_name'), kwargs.get('args', {})
                 allowed = name == target
@@ -1071,8 +1069,7 @@ def register(ctx):
 
     def apply_followup(args, **kwargs):
         try:
-            from tools.approval_context import get_current_session_key
-            return json.dumps(bridge.workflows.apply(args, str(kwargs.get('session_id') or ''), get_current_session_key()))
+            return json.dumps(bridge.workflows.apply(args, str(kwargs.get('session_id') or ''), current_run_id()))
         except Exception as exc:
             return json.dumps({'ok': False, 'error': str(exc)})
 

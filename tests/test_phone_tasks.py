@@ -71,6 +71,54 @@ async def submit(m, key, **kw):
     return m.registry.get(result['task_id']) if result.get('task_id') else result
 
 
+@pytest.fixture
+def native_identity(monkeypatch):
+    from contextvars import ContextVar
+    run = ContextVar('test_native_run', default=None)
+    api = ModuleType('gateway.session_api_turn')
+    api.api_execution = ContextVar('test_api_execution', default={})
+    api.current_api_run_id = run.get
+    approval = ModuleType('tools.approval_context')
+    approval.get_current_session_key = lambda: 'agent:main:api_server:dm:conversation'
+    monkeypatch.setitem(sys.modules, 'gateway.session_api_turn', api)
+    monkeypatch.setitem(sys.modules, 'tools.approval_context', approval)
+    return run
+
+
+async def test_canonical_phone_run_authorizes_tools_and_context(system, native_identity):
+    from hfp_mcp.hermes_bridge import PhoneBridge
+    m, api, store, root = system
+    row = await submit(m, 'ram')
+    native_identity.set(row['run_id'])
+    bridge = PhoneBridge(m.bridge.config, store, profile='default', profile_config={})
+    assert bridge.before_tool(session_id=root, tool_name='terminal') is None
+    assert 'Live phone task:' in bridge.before_llm(session_id=root)['context']
+    assert bridge.authorize(root, 'terminal')['run_id'] == row['run_id']
+    store.revoke('parent')
+    assert bridge.before_tool(session_id=root, tool_name='terminal')['action'] == 'block'
+
+
+async def test_canonical_late_run_cannot_borrow_successor_authority(system, native_identity):
+    from contextvars import copy_context
+    from hfp_mcp.hermes_bridge import PhoneBridge
+    m, api, store, root = system
+    first = await submit(m, 'first')
+    native_identity.set(first['run_id'])
+    late = copy_context()
+    api.runs[first['run_id']].update(status='completed', output='done')
+    await m.refresh(first)
+    second = await submit(m, 'second')
+    native_identity.set(second['run_id'])
+    bridge = PhoneBridge(m.bridge.config, store, profile='default', profile_config={})
+    assert bridge.before_tool(session_id=root, tool_name='terminal') is None
+    assert late.run(bridge.before_tool, session_id=root, tool_name='terminal')['action'] == 'block'
+    other = await submit(m, 'other', relationship='independent')
+    assert bridge.before_tool(session_id=other['session_id'], tool_name='terminal')['action'] == 'block'
+    # An API context without an admitted run must not borrow the route's identity.
+    native_identity.set(None)
+    assert bridge.before_tool(session_id=root, tool_name='terminal')['action'] == 'block'
+
+
 @pytest.mark.parametrize('verified', [True, False])
 async def test_completion_leads_with_observed_schedule_receipt(system, verified):
     m, api, store, root = system

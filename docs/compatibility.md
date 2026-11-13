@@ -26,6 +26,15 @@ on unsupported runtimes. A passing local prerequisite check is not a live provid
 health check.
 
 The plugin uses Hermes's native session storage and internal compaction interface.
+Canonical Runs execution also requires the [companion Hermes repair](../setup/hermes-api-run-identity.patch) exposing
+`gateway.session_api_turn.current_api_run_id()`, bound from the owner's exact
+admission in `gateway/session_ingress.py`. The unpatched revision above passes
+legacy identity checks but rejects active phone tasks on the canonical path.
+The plugin uses this request identity independently of the reusable conversation
+approval route, including for follow-up decisions. Older direct Runs execution
+continues to use its original request-scoped approval key. The isolated check now
+exercises canonical admission, the real TurnRunner approval scope, plugin hooks,
+sequential requests and late-worker revocation without executing a model or call.
 Upgrades can change these interfaces. Before changing Hermes revisions, rerun
 `python3 scripts/check_hermes.py --hermes /path/to/hermes`. It bootstraps the
 selected managed environment before switching to a disposable, credential-free

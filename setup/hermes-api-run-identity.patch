@@ -1,0 +1,92 @@
+diff --git a/gateway/session_api_turn.py b/gateway/session_api_turn.py
+index 31b546cd06..98fab16ce9 100644
+--- a/gateway/session_api_turn.py
++++ b/gateway/session_api_turn.py
+@@ -14,6 +14,18 @@ from gateway.session_results import admission_result
+ from hermes_state_runtime import RuntimeStoreError, admit_session_input, _json
+
+ api_execution: ContextVar[dict | None] = ContextVar('api_execution', default=None)
++
++
++def current_api_run_id() -> str | None:
++    """Exact Runs admission executing here, distinct from its conversation approval route.
++
++    Only the owner binds this from its admission row. Tool workers inherit the
++    original request's context, including when a successor uses the same route.
++    """
++    current = api_execution.get()
++    return current.get('run_id') if current is not None else None
++
++
+ _SETTINGS_PREFIX = 'gateway.api.settings.v1.'
+ # Request-owned sinks an API observer may register for its admission's execution.
+ _OBSERVER_KEYS = ('stream_delta_callback', 'tool_start_callback', 'tool_complete_callback',
+diff --git a/gateway/session_ingress.py b/gateway/session_ingress.py
+index 38d11d7edd..8a5a0a7701 100644
+--- a/gateway/session_ingress.py
++++ b/gateway/session_ingress.py
+@@ -289,6 +289,11 @@ async def execute_admission(authority, ref, row):
+             if is_api:
+                 # Committed media resolves under the owning profile's home, like admission did.
+                 prepared = prepare_api_execution(authority, ref, row['payload'])
++                # Execution identity comes from the committed admission, never client
++                # content/metadata or the conversation's reusable approval routing key.
++                request_id = row['request_id']
++                prepared['run_id'] = (request_id if row['principal_id'] == 'api'
++                                      and request_id.startswith('run_') else None)
+                 api_execution.set(prepared)
+                 if isinstance(event.text, list):
+                     # The durable transcript keeps the committed media references (the same
+diff --git a/tests/gateway/test_api_run_execution_identity.py b/tests/gateway/test_api_run_execution_identity.py
+new file mode 100644
+--- /dev/null
++++ b/tests/gateway/test_api_run_execution_identity.py
+@@ -0,0 +1,48 @@
++"""Runs keep request identity when canonical execution uses conversation routing."""
++import asyncio
++from contextvars import copy_context
++
++import pytest
++
++from gateway.session_api_turn import admit_api_turn
++from gateway.session_ingress import execute_admission
++from gateway.session_results import execution_result
++
++
++@pytest.mark.asyncio
++async def test_run_identity_follows_each_admission_and_late_worker(api, owner):
++    from gateway.session_api_turn import current_api_run_id
++
++    retained = []
++    seen = []
++
++    async def handle(event):
++        seen.append(await asyncio.to_thread(current_api_run_id))
++        retained.append(copy_context())
++        execution_result.get()['result'] = {'final_response': 'ok'}
++        return 'ok'
++
++    owner.runner._handle_message = handle
++    for run_id in ('run_first', 'run_second'):
++        _, ref, row = admit_api_turn(api, session_id='same-conversation',
++            active_run_id=run_id, user_message='hello', conversation_history=[])
++        assert await execute_admission(owner, ref, row) == 'ok'
++        assert current_api_run_id() is None
++    assert seen == ['run_first', 'run_second']
++    assert retained[0].run(current_api_run_id) == 'run_first'
++    assert retained[1].run(current_api_run_id) == 'run_second'
++
++
++@pytest.mark.asyncio
++async def test_non_run_api_admission_cannot_supply_run_identity(api, owner):
++    from gateway.session_api_turn import current_api_run_id
++
++    async def handle(event):
++        assert current_api_run_id() is None
++        execution_result.get()['result'] = {'final_response': 'ok'}
++        return 'ok'
++
++    owner.runner._handle_message = handle
++    _, ref, row = admit_api_turn(api, session_id='ordinary-api',
++        request_id='ordinary-client-request', user_message='run_spoofed', conversation_history=[])
++    assert await execute_admission(owner, ref, row) == 'ok'
