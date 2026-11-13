@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Breaking fresh-install layout: the daemon uses a non-editable wheel in a
+  versioned `.venv-<id>`, selected through `.venv`. Add optional combined Hermes
+  setup and `setup/update.py` with read-only checks, explicit host-Python changes,
+  retained Gemini selection, idle cutover, and previous-environment retention.
+  Routine updates do not run privileged host setup or upgrade Hermes. Legacy
+  real-directory venvs require a documented clean reinstall; user data is retained.
+
 - Breaking installer change: use `--hermes` with managed Hermes instead of
   `--python`. Bundle the portable supporting package as a buildable plugin so
   Hermes PM retains it across dependency environment rebuilds. Add portable

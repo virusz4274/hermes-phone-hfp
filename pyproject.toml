@@ -30,6 +30,7 @@ dependencies = [
 # Only the Bluetooth-owning daemon needs native D-Bus/GLib bindings.
 # The Hermes plugin uses the portable base package.
 daemon = [
+    "packaging>=24,<27",
     "mcp>=1.27.0,<2",
     "uvicorn>=0.30.0,<1",
     "dbus-python>=1.3.2",

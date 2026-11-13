@@ -144,6 +144,7 @@ def test_host_backup_rejects_symlinks(tmp_path):
 
 def test_host_preflight_missing_prerequisite_does_not_write(monkeypatch, tmp_path):
     module = host_module()
+    monkeypatch.setattr(module, "probe_python", lambda _: None)
     monkeypatch.setattr(
         module.pwd,
         "getpwnam",

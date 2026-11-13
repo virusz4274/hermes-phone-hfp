@@ -8,13 +8,13 @@ cd hermes-phone-hfp
 ```
 
 `main` is the supported installation branch. It moves forward as fixes are merged;
-updates remain manual. To stay on the current version, run `git pull` in this
-checkout before rerunning the installers. To keep a particular installation on
-its current code, do not pull until you are ready to update. See [Maintenance](maintenance.md).
+updates remain manual. Select or pull the desired revision, then run
+`python3 setup/update.py` for an installation using the new layout. Installed
+daemon code comes from a wheel, so pulling alone does not change it. See
+[Maintenance](maintenance.md) for updates and legacy clean reinstalls.
 
 The checkout includes the daemon, plugin, host setup and examples. See
 [compatibility](compatibility.md) before installing into Hermes.
-See [compatibility](compatibility.md) before installing into Hermes.
 
 ## 1. Prerequisites
 
@@ -31,14 +31,29 @@ For Gemini Live:
 
 ```bash
 sudo bash setup/install.sh --check
-sudo bash setup/install.sh --with-gemini
+sudo bash setup/install.sh --with-gemini --hermes-home ~/.hermes --hermes hermes
 ```
 
 For classic STT/TTS only, omit `--with-gemini`.
 
-This installs OS/Python dependencies, configures BlueZ and WirePlumber, generates a private control token, and starts `hfp-mcp.service` under your user account. It restarts Bluetooth during setup. It does not install or restart Hermes.
+This fresh installer requires a checkout without `.venv` and an inactive phone
+daemon. It installs OS dependencies, configures BlueZ/WirePlumber, creates a private
+control token, and starts the HFP user service. Bluetooth is restarted during host
+setup. With `--hermes-home`, it installs the plugin through Hermes PM and
+stops/restarts a previously running user gateway through Hermes's activity guard;
+it never forces interruption of active work. Omit `--hermes-home` for daemon-only
+setup, or if you will install the plugin separately in step 3.
 
-`--check` performs preflight only. Before changes, the installer prints a private
+The service user's host Python (default `/usr/bin/python3`) creates a
+`--system-site-packages` venv at its final `.venv-<id>` path. A stable `.venv`
+symlink selects it. Package building and non-editable wheel installation run as
+that user, not root. Select another already installed, supported interpreter with
+`--python /usr/bin/python3.13`; it must have matching D-Bus/GLib bindings. The
+installer does not download Python or use Hermes's interpreter for Bluetooth.
+
+`--check` performs preflight only and refuses existing layouts rather than
+migrating them. Use `python3 setup/update.py --check` for new-layout installations.
+Before changes, the fresh installer prints a private
 configuration backup location. See [recovery](maintenance.md#recovering-a-failed-installation).
 
 The daemon is a systemd **user service**. The installer enables it and enables user lingering, so it starts at boot without an interactive login. Manage it with `systemctl --user`; there is no second HFP system service to start.
@@ -57,6 +72,10 @@ The installer creates `~/.config/hfp-mcp.env` from [the current environment exam
 Optional settings stay visible as commented lines (`#HFP_...=...`) with short explanations. They are inactive until you remove the leading `#` and set a suitable value. Edit an existing active assignment instead of adding a duplicate. An absent option remains configurable later; leaving it absent or commented uses its default when one exists. Keep the model-specific guidance, timeout ranges and retention notes alongside the options.
 
 ## 3. Install the one Hermes plugin
+
+Skip this installation command if step 2 already used `--hermes-home`.
+The combined installer records one Hermes home and launcher for routine updates.
+Installing a plugin separately does not add it to the daemon installation record.
 
 Select the home used by your existing managed Hermes installation. For a typical default installation:
 
@@ -225,11 +244,17 @@ If `journalctl --user` reports no journal files, read the service's entries in t
 sudo journalctl _SYSTEMD_USER_UNIT=hfp-mcp.service -n 80 --no-pager
 ```
 
-If an earlier installation failed with a read-only `/run/user/<uid>/hfp-mcp` error, rerun the current Bluetooth installer. Its service definition creates the private runtime directory before applying filesystem restrictions. Rerunning also recreates a deleted daemon environment file; re-enter any provider credentials that were in that file.
+If an older installation failed with a read-only `/run/user/<uid>/hfp-mcp` error,
+follow the clean-reinstall procedure for the new service definition; it creates
+the private runtime directory before applying filesystem restrictions. Restore a
+deleted daemon environment file from backup before updating. The fresh installer
+does not repair an existing venv layout or recover deleted provider credentials.
 
 For adding profiles, caller notes, approval commands and extension APIs, continue with [Configuration and operations](phone-routing.md).
 
-For subsequent installations, updates, backups or removal, follow [Maintenance](maintenance.md). Updates run only when you invoke an installer; full uninstall remains manual.
+For updates, backups or removal, follow [Maintenance](maintenance.md). Routine
+updates run only when you invoke `python3 setup/update.py`; full uninstall remains
+manual. Legacy real-directory `.venv` installs require a clean reinstall.
 
 ### Updating task coordination
 

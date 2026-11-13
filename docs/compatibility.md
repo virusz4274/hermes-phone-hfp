@@ -5,7 +5,7 @@ establish support for every Bluetooth adapter or handset.
 
 | Component | Current target | Evidence / limitation |
 | --- | --- | --- |
-| Daemon Python | 3.11–3.13 | Native daemon CI uses 3.13; the installer retains the host interpreter |
+| Daemon Python | 3.11–3.13 | Host-based venv with matching distro D-Bus/GLib bindings; updates retain the recorded interpreter unless `--python` is explicit |
 | Portable plugin Python | 3.11–3.14 | Package checks cover 3.13/3.14; local validation includes fresh Python 3.14 installation |
 | Hermes | `085f562af53a6fedadac3681e2c498fc71316132` | Managed runtime and staged plugin publication required; native plugin/session/workflow check passes on this revision |
 | MCP SDK | 1.x, >=1.27 | Daemon extra only; MCP 2 renamed FastMCP and is not a daemon target |
@@ -18,6 +18,13 @@ establish support for every Bluetooth adapter or handset.
 The phone plugin's base package does not require the MCP SDK, uvicorn, or native
 D-Bus/GLib bindings. This avoids replacing Hermes's own MCP dependency. Install
 `hfp-mcp[daemon]` in the Bluetooth daemon's separate environment.
+
+The fresh installer creates `.venv-<id>` directories and selects one through
+`.venv`. Legacy real-directory venvs require a clean reinstall. The updater's
+`--check` validates the recorded Python and application dependencies without
+starting Hermes, building packages, or changing services. Different daemon and
+Hermes Python minor versions are supported; native bindings must match the daemon
+interpreter, not Hermes's interpreter. There is no automatic Python download.
 
 `hfp-mcp doctor` checks each configured endpoint's authentication, bridge secret,
 profile identity and Runs API capabilities. Continuity requires compatible native
