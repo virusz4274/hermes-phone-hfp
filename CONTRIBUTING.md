@@ -30,8 +30,14 @@ venv with `--system-site-packages`, and use the distro bindings. The portable
 Hermes plugin only needs `pip install -e '.[dev]'`; the full daemon suite needs
 the native dependencies above. Tests use fake Bluetooth objects and need no phone.
 
-Run `bash -n setup/install.sh` after installer edits. Test installer changes using
+Run `bash -n setup/install.sh` after installer edits. The supported daemon Python
+range lives in `setup/runtime.py`; add native validation before extending it.
+The developer `.venv` above is intentionally editable and is not a production
+updater layout. Production installs use immutable wheels and `.venv-<id>` targets.
+Test installer changes using
 temporary directories and fake commands; do not run the real installer on CI.
+Native CI may exercise environment preparation in temporary directories, without
+running privileged host setup or starting services.
 See [validation guidance](docs/validation.md) for automated checks and Hermes integration guidance.
 
 ## Pull requests

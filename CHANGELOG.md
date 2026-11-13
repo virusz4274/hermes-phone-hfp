@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Breaking fresh-install layout: the daemon uses a non-editable wheel in a
+  versioned `.venv-<id>`, selected through `.venv`. Add optional combined Hermes
+  setup and `setup/update.py` with read-only checks, explicit host-Python changes,
+  retained Gemini selection, idle cutover, and previous-environment retention.
+  Routine updates do not run privileged host setup or upgrade Hermes. Legacy
+  real-directory venvs require a documented clean reinstall; user data is retained.
+
+- Breaking installer change: use `--hermes` with managed Hermes instead of
+  `--python`. Bundle the portable supporting package as a buildable plugin so
+  Hermes PM retains it across dependency environment rebuilds. Add portable
+  Python 3.14 support; the daemon remains on Python 3.11–3.13. Existing scheduled
+  scripts keep their imports and require no rewriting.
+
 - Clarify Gemini's existing hangup instruction: only a current-caller request or
   goodbye ends the conversation; completing a task does not. No additional model
   checks, tool arguments, or confirmation steps are introduced.

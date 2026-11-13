@@ -26,6 +26,11 @@ handoff remain unfinished.
 
 ## Next improvements
 
+The [classic voice integration plan](docs/classic-voice-integration-plan.md)
+tracks CV-00–CV-08: native `auxiliary.voice_chat` routing, authorized run streaming,
+Hermes speech adapters and separate automated/deployment/live acceptance. This
+expands the existing classic backend; all plan milestones are currently pending.
+
 Prioritize configuration/CLI reliability and missing readiness/identity/reporting
 interfaces (QOL-01/02, OPS-01/02/03), then the remaining owner/office workflows.
 Phone scheduling, reminders, and callback retries use native Hermes jobs; these

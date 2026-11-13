@@ -1,4 +1,5 @@
-.venv/
+.venv
+.hfp-update.lock
 __pycache__/
 *.pyc
 *.egg-info/

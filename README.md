@@ -102,6 +102,12 @@ See [TODO](TODO.md) and the [implementation backlog](docs/implementation-backlog
 for implemented groundwork, remaining reliability/office features, and separate
 automated, deployment, and live acceptance evidence.
 
+The [classic voice expansion design](docs/classic-voice-expansion.md) analyzes
+reusing Hermes voice-model routing and streaming speech for headless phone calls.
+It describes proposed work, not capabilities already enabled by configuration.
+The [classic voice integration plan](docs/classic-voice-integration-plan.md)
+defines implementation milestones and acceptance checks.
+
 See [Contributing](CONTRIBUTING.md) for environment creation without changing
 Bluetooth services. Once the environment exists:
 

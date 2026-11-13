@@ -5,8 +5,9 @@ establish support for every Bluetooth adapter or handset.
 
 | Component | Current target | Evidence / limitation |
 | --- | --- | --- |
-| Python | 3.11–3.13 | Supported range; current CI tests 3.13 only; local validation uses 3.13 |
-| Hermes | `130b8f2c5dbca93a81aa396dd2ba44420d78f6f0` | Native plugin/session compatibility check; this is a commit, not a promised minimum version |
+| Daemon Python | 3.11–3.13 | Host-based venv with matching distro D-Bus/GLib bindings; updates retain the recorded interpreter unless `--python` is explicit |
+| Portable plugin Python | 3.11–3.14 | Package checks cover 3.13/3.14; local validation includes fresh Python 3.14 installation |
+| Hermes | `085f562af53a6fedadac3681e2c498fc71316132` | Managed runtime and staged plugin publication required; native plugin/session/workflow check passes on this revision |
 | MCP SDK | 1.x, >=1.27 | Daemon extra only; MCP 2 renamed FastMCP and is not a daemon target |
 | Bluetooth host | Debian-family Linux, systemd; Raspberry Pi OS Bookworm/Trixie | Installer targets; fresh-machine validation is required on each platform |
 | Phone / Bluetooth controller | HFP Audio Gateway + SCO over HCI | No universal handset/adapter claim; publish results with model and OS versions |
@@ -18,6 +19,13 @@ The phone plugin's base package does not require the MCP SDK, uvicorn, or native
 D-Bus/GLib bindings. This avoids replacing Hermes's own MCP dependency. Install
 `hfp-mcp[daemon]` in the Bluetooth daemon's separate environment.
 
+The fresh installer creates `.venv-<id>` directories and selects one through
+`.venv`. Legacy real-directory venvs require a clean reinstall. The updater's
+`--check` validates the recorded Python and application dependencies without
+starting Hermes, building packages, or changing services. Different daemon and
+Hermes Python minor versions are supported; native bindings must match the daemon
+interpreter, not Hermes's interpreter. There is no automatic Python download.
+
 `hfp-mcp doctor` checks each configured endpoint's authentication, bridge secret,
 profile identity and Runs API capabilities. Continuity requires compatible native
 sessions and task support. Compaction is optional and produces an explicit error
@@ -25,9 +33,20 @@ on unsupported runtimes. A passing local prerequisite check is not a live provid
 health check.
 
 The plugin uses Hermes's native session storage and internal compaction interface.
+Canonical Runs execution also requires the [companion Hermes repair](../setup/hermes-api-run-identity.patch) exposing
+`gateway.session_api_turn.current_api_run_id()`, bound from the owner's exact
+admission in `gateway/session_ingress.py`. The unpatched revision above passes
+legacy identity checks but rejects active phone tasks on the canonical path.
+The plugin uses this request identity independently of the reusable conversation
+approval route, including for follow-up decisions. Older direct Runs execution
+continues to use its original request-scoped approval key. The isolated check now
+exercises canonical admission, the real TurnRunner approval scope, plugin hooks,
+sequential requests and late-worker revocation without executing a model or call.
 Upgrades can change these interfaces. Before changing Hermes revisions, rerun
-`scripts/check_hermes.py` using that revision's interpreter and a disposable home
-(created automatically), then perform the relevant hardware acceptance checks.
+`python3 scripts/check_hermes.py --hermes /path/to/hermes`. It bootstraps the
+selected managed environment before switching to a disposable, credential-free
+home, then exercises native interfaces without calls or message delivery.
+Perform the relevant hardware acceptance checks separately.
 
 Record hardware results with phone model/OS, controller chipset, host OS/kernel,
 BlueZ/WirePlumber versions, Hermes commit, voice backend, incoming/outgoing calls,

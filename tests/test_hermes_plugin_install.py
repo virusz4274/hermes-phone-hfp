@@ -1,6 +1,9 @@
 import importlib.util
+import json
+import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -22,11 +25,59 @@ def isolated_config_paths(tmp_path, monkeypatch):
 
 @pytest.fixture
 def source(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        shutil.copy2(root / name, tmp_path / name)
+    package = tmp_path / "src/hfp_mcp"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("# bundled package\n")
+    (package / "hermes_bridge.py").write_text("def register(ctx): pass\n")
+    (package / "phone_workflow_runner.py").write_text("def main(*args): pass\n")
     source = tmp_path / "source"
     source.mkdir()
     (source / "plugin.yaml").write_text("name: hfp-phone")
     (source / "__init__.py").write_text("# current plugin")
     return source
+
+
+@pytest.fixture(autouse=True)
+def isolated_pm(monkeypatch):
+    # The real PM integration is exercised against a disposable Hermes home.
+    # Unit tests model its publication/selection boundaries without touching it.
+    def publish(home, staged):
+        destination = home / "plugins/hfp-phone"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.move(str(staged), str(destination))
+
+    def select(home, plugins):
+        path = home / "config.yaml"
+        config = yaml.safe_load(path.read_text()) or {}
+        section = config.setdefault("plugins", {})
+        section["enabled"] = plugins["enabled"]
+        if "disabled" in plugins:
+            section["disabled"] = plugins["disabled"]
+        path.write_text(yaml.safe_dump(config))
+
+    monkeypatch.setattr(installer, "publish_plugin", publish)
+    monkeypatch.setattr(installer, "select_plugin", select)
+
+
+def test_staged_plugin_declares_and_bundles_the_portable_package(tmp_path, source):
+    staged = tmp_path / "staged"
+    installer.stage_plugin(source, staged)
+    project = tomllib.loads((staged / "pyproject.toml").read_text())
+    assert project["project"]["name"] == "hfp-mcp"
+    assert project["project"]["requires-python"] == ">=3.11,<3.15"
+    assert "build-system" in project
+    assert "optional-dependencies" not in project["project"]
+    assert "scripts" not in project["project"]
+    assert not any("dbus" in req or "PyGObject" in req or "google-genai" in req
+                   for req in project["project"]["dependencies"])
+    assert (staged / "src/hfp_mcp/hermes_bridge.py").is_file()
+    assert (staged / "src/hfp_mcp/phone_workflow_runner.py").is_file()
+    assert (staged / "LICENSE").is_file()
 
 
 def test_install_requires_existing_profile_and_preserves_settings_and_backup(
@@ -89,7 +140,7 @@ def test_clean_install_and_reinstall_have_one_plugin_and_keep_caller_data(
         assert (home / "config.yaml").stat().st_mode & 0o077 == 0
 
 
-def test_install_restores_plugins_if_configuration_write_fails(
+def test_dependency_failure_preserves_original_plugin_and_configuration(
     tmp_path, source, monkeypatch
 ):
     home = tmp_path / "profile"
@@ -99,42 +150,62 @@ def test_install_restores_plugins_if_configuration_write_fails(
     config = home / "config.yaml"
     config.write_text("model: existing\n")
 
-    def fail_replace(*args):
-        raise OSError("simulated config write failure")
+    def fail_publish(*args):
+        raise RuntimeError("simulated dependency conflict")
 
-    monkeypatch.setattr(Path, "replace", fail_replace)
-    with pytest.raises(OSError, match="simulated"):
+    monkeypatch.setattr(installer, "publish_plugin", fail_publish)
+    with pytest.raises(RuntimeError, match="dependency conflict"):
         installer.install_plugin(home, source)
     assert (old / "__init__.py").read_text() == "original"
     assert config.read_text() == "model: existing\n"
 
 
-def test_launcher_configures_with_selected_interpreter(tmp_path, monkeypatch):
+def test_launcher_uses_the_published_managed_bootstrap(tmp_path, monkeypatch):
     home = tmp_path / "profile with spaces"
     home.mkdir()
     (home / "config.yaml").write_text("model: existing\n")
     monkeypatch.setattr(
         sys,
         "argv",
-        ["install_hermes.py", "--home", str(home), "--python", sys.executable],
+        ["install_hermes.py", "--home", str(home), "--hermes", "hermes"],
     )
-    real_run = subprocess.run
     commands = []
 
     def run(command, **kwargs):
         commands.append(command)
-        # Exercise the actual configuration subprocess without installing packages.
-        if command[1] == "-c":
-            return real_run(command, **kwargs)
+        assert kwargs["env"]["HERMES_HOME"] == str(home)
+        if command[0] == "hermes":
+            assert command[1:5] == ["--print-runtime-command", "--module", "stat", "--"]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps([
+                "/managed/python", "-I", "-c", "import sys, runpy; import hermes_bootstrap",
+                *command[5:],
+            ]))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(installer.subprocess, "run", run)
     installer.main()
-    assert all(command[0] == sys.executable for command in commands)
     assert len(commands) == 2
-    assert "--no-deps" not in commands[0]
-    assert (home / "plugins/hfp-phone/__init__.py").is_file()
-    assert (tmp_path / ".config/hfp-mcp/config.yaml").is_file()
+    assert commands[1][0:3] == ["/managed/python", "-I", "-c"]
+    assert "import hermes_bootstrap" in commands[1][3]
+    assert "runpy.run_path" in commands[1][3]
+    assert commands[1][4:] == [str(installer.__file__), "--managed-child", "--home", str(home)]
+    assert not (home / "plugins").exists()
+
+
+def test_managed_command_executes_file_arguments_with_spaces(tmp_path):
+    script = tmp_path / "script with spaces.py"
+    script.write_text("import sys; print(repr(sys.argv))\n")
+    # Exercise the complete adapter rather than shell-quoting a Python fragment.
+    native = [sys.executable, "-I", "-c", "import sys, runpy; runpy.run_module('stat', run_name='__main__', alter_sys=True)",
+              str(script), "argument with spaces"]
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout=json.dumps(native)))
+        command = installer.managed_script_command("hermes", script, ["argument with spaces"], env={})
+    finally:
+        monkeypatch.undo()
+    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    assert repr([str(script), "argument with spaces"]) in completed.stdout
 
 
 def test_path_setup_creates_no_caller_grants_and_preserves_credentials(tmp_path):

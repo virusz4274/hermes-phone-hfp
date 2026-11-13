@@ -52,8 +52,9 @@ def test_installer_includes_gemini_live_optional_dependencies():
         Path(__file__).resolve().parents[1] / "setup" / "install.sh"
     ).read_text()
 
-    assert "[daemon,gemini-live]" in install_script
-    assert '"$REPO_DIR[daemon]"' in install_script
+    assert "PREPARE_ARGS+=(--with-gemini)" in install_script
+    assert '"${USER_RUN[@]}" python3 "$SCRIPT_DIR/runtime.py"' in install_script
+    assert "pip install -e" not in install_script
     assert "Including Gemini Live optional dependencies" in install_script
 
 

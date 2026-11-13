@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# Idempotent Raspberry Pi OS Bookworm/Trixie installation for hfp-mcp.
+# Fresh Raspberry Pi OS Bookworm/Trixie installation for hfp-mcp.
 set -euo pipefail
 umask 077
 WITH_GEMINI=false
 CHECK_ONLY=false
-for option in "$@"; do
-    case "$option" in
+DAEMON_PYTHON=/usr/bin/python3
+PLUGIN_HOME=""
+HERMES_LAUNCHER=hermes
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --with-gemini) WITH_GEMINI=true ;;
         --check) CHECK_ONLY=true ;;
-        *) echo "Usage: sudo bash setup/install.sh [--with-gemini] [--check]" >&2; exit 2 ;;
+        --python) DAEMON_PYTHON="${2:?--python requires an interpreter path}"; shift ;;
+        --hermes-home) PLUGIN_HOME="${2:?--hermes-home requires an existing home}"; shift ;;
+        --hermes) HERMES_LAUNCHER="${2:?--hermes requires a launcher}"; shift ;;
+        *) echo "Usage: sudo bash setup/install.sh [--with-gemini] [--python PATH] [--hermes-home PATH] [--hermes PATH] [--check]" >&2; exit 2 ;;
     esac
+    shift
 done
 
 if ! $CHECK_ONLY && [ "$(id -u)" -ne 0 ]; then
@@ -31,20 +38,49 @@ USER_CONFIG_DIR="$USER_HOME/.config"
 USER_SYSTEMD_DIR="$USER_CONFIG_DIR/systemd/user"
 USER_ENV_FILE="$USER_CONFIG_DIR/hfp-mcp.env"
 USER_STATE_DIR="$USER_HOME/.local/state/hfp-mcp"
+USER_RUN=(runuser -u "$SERVICE_USER" -- env HOME="$USER_HOME" PATH="$USER_HOME/.local/bin:$PATH" XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" PYTHONDONTWRITEBYTECODE=1)
+if [ "$(id -u)" -ne 0 ]; then
+    USER_RUN=(env HOME="$USER_HOME" PATH="$USER_HOME/.local/bin:$PATH" XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" PYTHONDONTWRITEBYTECODE=1)
+fi
+HOST_ARGS=(--repo "$REPO_DIR" --user "$SERVICE_USER" --python "$DAEMON_PYTHON")
 
 echo "==> Checking host prerequisites before changes"
-python3 "$SCRIPT_DIR/host_config.py" --repo "$REPO_DIR" --user "$SERVICE_USER"
+python3 "$SCRIPT_DIR/host_config.py" "${HOST_ARGS[@]}"
 if [ "$(id -u)" -eq 0 ]; then
     runuser -u "$SERVICE_USER" -- test -r "$REPO_DIR/src/hfp_mcp/server.py"
+    runuser -u "$SERVICE_USER" -- test -w "$REPO_DIR"
+fi
+if [ -n "$PLUGIN_HOME" ]; then
+    "${USER_RUN[@]}" python3 -B -c \
+        'import sys; sys.path.insert(0, sys.argv[1]); from setup.runtime import validate_home; validate_home(sys.argv[2], sys.argv[3])' \
+        "$REPO_DIR" "$PLUGIN_HOME" "$HERMES_LAUNCHER"
+fi
+if [ -S "/run/user/$SERVICE_UID/bus" ] && \
+    "${USER_RUN[@]}" systemctl --user is-active --quiet hfp-mcp.service; then
+    echo "ERROR: stop the existing phone daemon before a fresh installation; use setup/update.py for routine updates" >&2
+    exit 1
 fi
 if $CHECK_ONLY; then
     exit 0
 fi
 
-BACKUP_DIR="$(python3 "$SCRIPT_DIR/host_config.py" --repo "$REPO_DIR" \
-    --user "$SERVICE_USER" --backup-dir /var/lib/hfp-mcp/backups)"
+BACKUP_DIR="$(python3 "$SCRIPT_DIR/host_config.py" "${HOST_ARGS[@]}" --backup-dir /var/lib/hfp-mcp/backups)"
 echo "==> Configuration backup: $BACKUP_DIR"
-trap 'echo "Installation failed. Configuration backup: $BACKUP_DIR. See docs/maintenance.md for recovery." >&2' ERR
+SERVICE_CUTOVER=false
+GATEWAY_WAS_ACTIVE=false
+on_install_failure() {
+    local status=$?
+    [ "$status" -ne 0 ] || return 0
+    if $SERVICE_CUTOVER; then
+        "${USER_SYSTEMCTL[@]}" stop hfp-mcp.service || true
+        if $GATEWAY_WAS_ACTIVE; then
+            "${USER_SYSTEMCTL[@]}" stop hermes-gateway.service || true
+        fi
+    fi
+    echo "Installation failed. Configuration backup: $BACKUP_DIR. See docs/maintenance.md for recovery." >&2
+    exit "$status"
+}
+trap on_install_failure EXIT
 
 echo "==> Installing system dependencies"
 apt-get update -qq
@@ -85,16 +121,20 @@ else
     echo "    → Installed WirePlumber 0.5 policy"
 fi
 
-echo "==> Installing Python package"
-python3 -m venv --system-site-packages "$REPO_DIR/.venv"
-"$REPO_DIR/.venv/bin/pip" install --upgrade pip
+echo "==> Preparing daemon environment as $SERVICE_USER"
+PREPARE_ARGS=(prepare --repo "$REPO_DIR" --python "$DAEMON_PYTHON")
 if $WITH_GEMINI; then
     echo "    → Including Gemini Live optional dependencies"
-    "$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR[daemon,gemini-live]"
-else
-    "$REPO_DIR/.venv/bin/pip" install -e "$REPO_DIR[daemon]"
+    PREPARE_ARGS+=(--with-gemini)
 fi
-chown -R "$SERVICE_USER:$SERVICE_GROUP" "$REPO_DIR/.venv"
+if [ -n "$PLUGIN_HOME" ]; then
+    PREPARE_ARGS+=(--hermes-home "$PLUGIN_HOME" --hermes "$HERMES_LAUNCHER")
+fi
+CANDIDATE="$("${USER_RUN[@]}" python3 "$SCRIPT_DIR/runtime.py" "${PREPARE_ARGS[@]}")"
+if [ -n "$PLUGIN_HOME" ]; then
+    "${USER_RUN[@]}" env HERMES_HOME="$PLUGIN_HOME" python3 "$REPO_DIR/scripts/check_hermes.py" --hermes "$HERMES_LAUNCHER"
+fi
+"${USER_RUN[@]}" python3 "$SCRIPT_DIR/runtime.py" activate --repo "$REPO_DIR" --environment "$CANDIDATE"
 
 echo "==> Installing private service configuration"
 install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
@@ -167,7 +207,18 @@ done
 USER_SYSTEMCTL=(runuser -u "$SERVICE_USER" -- env HOME="$USER_HOME" XDG_RUNTIME_DIR="/run/user/$SERVICE_UID" systemctl --user)
 "${USER_SYSTEMCTL[@]}" daemon-reload
 "${USER_SYSTEMCTL[@]}" enable hfp-mcp.service
-"${USER_SYSTEMCTL[@]}" stop hfp-mcp.service
+if [ -n "$PLUGIN_HOME" ]; then
+    if "${USER_SYSTEMCTL[@]}" is-active --quiet hermes-gateway.service; then
+        GATEWAY_WAS_ACTIVE=true
+        "${USER_RUN[@]}" env HERMES_HOME="$PLUGIN_HOME" "$HERMES_LAUNCHER" gateway stop
+    fi
+    SERVICE_CUTOVER=true
+    "${USER_RUN[@]}" python3 "$SCRIPT_DIR/install_hermes.py" --home "$PLUGIN_HOME" --hermes "$HERMES_LAUNCHER"
+    if $GATEWAY_WAS_ACTIVE; then
+        "${USER_RUN[@]}" env HERMES_HOME="$PLUGIN_HOME" "$HERMES_LAUNCHER" gateway start
+    fi
+fi
+SERVICE_CUTOVER=true
 "${USER_SYSTEMCTL[@]}" try-restart wireplumber.service >/dev/null 2>&1 || true
 sleep 2  # allow WirePlumber/BlueZ profile release callbacks to settle
 "${USER_SYSTEMCTL[@]}" restart hfp-mcp.service
@@ -194,19 +245,22 @@ runuser -u "$SERVICE_USER" -- env HOME="$USER_HOME" XDG_RUNTIME_DIR="/run/user/$
 
 cat <<EOF
 
-Installation complete.
+Software installation complete. Finish enrollment, credentials and routing below.
 
 1. If no phone was adopted, enroll one for three minutes:
    $REPO_DIR/.venv/bin/hfp-mcp enroll --timeout 180
 2. Optionally pin HFP_ADAPTER_ADDRESS in $USER_ENV_FILE.
 3. Verify:
    $REPO_DIR/.venv/bin/hfp-mcp doctor
-4. Optional Hermes integration (no profile is created):
-   $REPO_DIR/.venv/bin/python $REPO_DIR/setup/install_hermes.py --home <existing-hermes-home> --python <hermes-venv-python>
+4. Optional Hermes integration if it was not selected with --hermes-home:
+   $REPO_DIR/.venv/bin/python $REPO_DIR/setup/install_hermes.py --home <existing-hermes-home> --hermes <hermes-launcher>
    See $REPO_DIR/docs/install.md for the complete first-time setup.
 5. Local MCP endpoint: http://127.0.0.1:8000/mcp
    The bearer token is synchronized between the mode-0600 environment and
    private control.token file.
+6. Routine updates (no sudo, apt, Git pull, or Bluetooth restart):
+   python3 $REPO_DIR/setup/update.py
+   Inspect prerequisites with: python3 $REPO_DIR/setup/update.py --check
 
 LAN clients must use an SSH tunnel or authenticated TLS reverse proxy. The
 daemon deliberately refuses an unauthenticated/plaintext non-loopback bind.

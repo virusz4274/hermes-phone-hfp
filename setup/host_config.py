@@ -12,6 +12,12 @@ import stat
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from setup.runtime import probe_python, validate_fresh
+
 
 def config_paths(home: Path) -> list[Path]:
     return [
@@ -27,9 +33,8 @@ def config_paths(home: Path) -> list[Path]:
     ]
 
 
-def preflight(repo: Path, user: str) -> list[Path]:
-    if not (3, 11) <= sys.version_info[:2] <= (3, 13):
-        raise ValueError("Supported preview runtime: Python 3.11–3.13")
+def preflight(repo: Path, user: str, python="/usr/bin/python3") -> list[Path]:
+    probe_python(python)
     account = pwd.getpwnam(user)
     if account.pw_uid == 0:
         raise ValueError("Choose a non-root SERVICE_USER")
@@ -62,10 +67,15 @@ def preflight(repo: Path, user: str) -> list[Path]:
         "setup/90-hfp-mcp.lua",
         "setup/render_hfp_env.py",
         "setup/update_bluez_main_conf.py",
+        "setup/runtime.py",
+        "setup/update.py",
+        "setup/install_hermes.py",
+        "scripts/check_hermes.py",
     )
     for name in required:
         if not (repo / name).is_file():
             raise ValueError(f"Incomplete checkout: missing {name}")
+    validate_fresh(repo)
     paths = config_paths(Path(account.pw_dir))
     for path in paths:
         if path.is_symlink() or (path.exists() and not path.is_file()):
@@ -108,9 +118,10 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--user", required=True)
     parser.add_argument("--backup-dir", type=Path)
+    parser.add_argument("--python", default="/usr/bin/python3")
     args = parser.parse_args()
     try:
-        paths = preflight(args.repo.resolve(), args.user)
+        paths = preflight(args.repo.resolve(), args.user, args.python)
         if args.backup_dir:
             print(backup(paths, args.backup_dir))
         else:

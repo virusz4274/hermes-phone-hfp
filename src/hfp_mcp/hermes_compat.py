@@ -6,6 +6,23 @@ import importlib
 import shutil
 
 
+def current_run_id() -> str:
+    """Read execution identity, never the latest run for a conversation route."""
+    try:
+        from gateway.session_api_turn import api_execution, current_api_run_id
+    except ImportError:
+        # Older direct Runs execution used its run ID as the approval key.
+        pass
+    else:
+        if api_execution.get() is not None:
+            run_id = current_api_run_id()
+            if not run_id:
+                raise PermissionError('API execution has no admitted run identity')
+            return run_id
+    from tools.approval_context import get_current_session_key
+    return get_current_session_key()
+
+
 def gateway_destination() -> dict:
     """Resolve Hermes's default home, without inheriting the phone/API origin."""
     try:
@@ -29,7 +46,7 @@ def validate_gateway_destination(destination: dict) -> None:
     if not any(t['id'] == destination['platform'] for t in cron_delivery_targets()):
         raise ValueError('The scheduled Hermes gateway is no longer configured or enabled')
 
-TESTED_HERMES_COMMIT = "819988acb750836387fbb9d5d76203a9b3f530f4"
+TESTED_HERMES_COMMIT = "085f562af53a6fedadac3681e2c498fc71316132"
 REQUIRED_RUN_FEATURES = frozenset(
     {
         "run_submission",
